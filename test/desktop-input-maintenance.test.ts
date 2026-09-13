@@ -141,7 +141,7 @@ it('carries the direct-turn offer only to the elected existing conversation', as
 });
 
 type Tab = { id: number; url?: string; pendingUrl?: string; windowId?: number; active?: boolean; pinned?: boolean };
-async function worker(inputs: Array<{ id: string; conversationId: string | null; directTurn?: { id: string; startedAt: number }; supersededConversationId?: string }>, modelCatalogRequest?: { nonce: string; expiresAt: number }, priorLocal: Record<string, unknown> = {}) {
+async function worker(inputs: Array<{ id: string; conversationId: string | null; directTurn?: { id: string; startedAt: number }; supersededConversationId?: string; helperProject?: string }>, modelCatalogRequest?: { nonce: string; expiresAt: number }, priorLocal: Record<string, unknown> = {}) {
   const tabs: Tab[] = [];
   const event = { addListener: () => {} };
   const localSaved: Record<string, unknown> = { port: 8765, token: 'test-pairing', ...priorLocal };
@@ -152,7 +152,7 @@ async function worker(inputs: Array<{ id: string; conversationId: string | null;
     const tab = { id: tabs.length + 1, pendingUrl: url, windowId }; tabs.push(tab); return tab;
   });
   const windows = {
-    get: vi.fn(async (id: number) => ({ id })),
+    get: vi.fn(async (id: number): Promise<{ id: number; state?: string; focused?: boolean }> => ({ id })),
     create: vi.fn(async ({ url }: { url: string }) => ({ id: 80, tabs: [await create({ url, windowId: 80 })] })),
     update: vi.fn()
   };
@@ -696,6 +696,31 @@ describe('one browser maintenance flight per desktop outbox publication', () => 
     await h.maintain();
     expect(h.create).toHaveBeenCalledTimes(1);
     expect(h.sendMessage).toHaveBeenCalledWith(h.tabs[1]!.id, { type: 'clf-desktop-input', id: firstId, conversationId: null });
+  });
+  it('carries the configured native Project only on a fresh persistent helper offer', async () => {
+    const h = await worker([{ id: firstId, conversationId: null, helperProject: 'Chat Core Temp' }]);
+    await h.maintain();
+    expect(h.create).toHaveBeenCalledTimes(1);
+    expect(h.tabs[0]!.pendingUrl).toBe(`https://chatgpt.com/?cos-input=${firstId}#cos-input=${firstId}`);
+    await h.maintain();
+    expect(h.sendMessage).toHaveBeenCalledWith(h.tabs[0]!.id, {
+      type: 'clf-desktop-input', id: firstId, conversationId: null, helperProject: 'Chat Core Temp'
+    });
+  });
+  it('temporarily reveals only the owned background window for Project selection and minimizes it after claim', async () => {
+    const h = await worker([{ id: firstId, conversationId: null, helperProject: 'Chat Core Temp' }]);
+    await h.maintain();
+    expect(h.windows.update).toHaveBeenCalledWith(80, { state: 'minimized', focused: false });
+    h.windows.get.mockResolvedValue({ id: 80, state: 'minimized', focused: false });
+    await h.maintain();
+    expect(h.windows.update).toHaveBeenCalledWith(80, { state: 'normal', focused: false });
+
+    const tab = h.tabs[0]!;
+    tab.url = tab.pendingUrl; delete tab.pendingUrl;
+    const sender = { tab: { id: tab.id }, documentId: 'helper-project', frameId: 0, url: tab.url };
+    const source = await h.authorizeDocument(sender, { navigationEpoch: 1 });
+    expect((await h.desktopInput({ id: firstId, conversationId: null, requiresAuthorization: true }, sender, source)).ok).toBe(true);
+    await vi.waitFor(() => expect(h.windows.update.mock.calls.filter(([, patch]) => patch.state === 'minimized')).toHaveLength(2));
   });
   it.each(['explicit-failure', 'ambiguous', 'closed'])('allows a single pre-send fallback only for %s', async reason => {
     const h = await worker([{ id: firstId, conversationId: null }]);

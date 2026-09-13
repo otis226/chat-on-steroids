@@ -550,6 +550,47 @@ describe('desktop input delivery and helper ownership', () => {
   const chatB = 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff';
   const text = 'Inspect the exact requested task';
   const claimed = (extra: Record<string, unknown> = {}) => ({ id: inputId, owner: 'input-owner', text, model: null, reasoningEffort: null, purpose: 'user', images: [], ...extra });
+  it('moves a fresh persistent helper into its configured native Project before claim and Send', async () => {
+    const projectId = 'g-p-11111111222233334444555555555555';
+    const projectHome = `https://chatgpt.com/g/${projectId}-chat-core-temp/project`;
+    const projectChat = `https://chatgpt.com/g/${projectId}-chat-core-temp/c/${chatB}`;
+    let claimPath = '';
+    live = await harness(`https://chatgpt.com/?cos-input=${inputId}#cos-input=${inputId}`, {
+      desktop_input: message => {
+        if (!message.authorize && !message.ack && !message.fail && typeof message.response !== 'string' && typeof message.partial !== 'string') {
+          claimPath = live!.window.location.pathname;
+        }
+        return { ok: true, data: message.authorize || message.ack ? { ok: true } : { input: claimed({ purpose: 'decision', helperProject: 'Chat Core Temp' }) } };
+      }
+    }, (document, dom) => {
+      const link = document.createElement('a');
+      link.href = projectHome;
+      link.textContent = 'Chat Core Temp';
+      Object.defineProperty(link, 'getClientRects', { value: () => [{ width: 120, height: 24 }] });
+      link.addEventListener('click', event => {
+        event.preventDefault();
+        dom.reconfigure({ url: projectHome });
+        const composer = document.querySelector('#prompt-textarea')!;
+        composer.replaceWith(composer.cloneNode(true));
+      });
+      document.body.prepend(link);
+    });
+    live.document.querySelector('[data-testid="send-button"]')!.addEventListener('click', () => {
+      live!.dom.reconfigure({ url: projectChat });
+      userTurn(live!.document, 'project-helper-user', text, { sent: false });
+      live!.document.querySelector('#prompt-textarea')!.textContent = '';
+      live!.hook.observe();
+    });
+
+    expect(await live.runtimeMessage({
+      type: 'clf-desktop-input', id: inputId, conversationId: null, helperProject: 'Chat Core Temp'
+    })).toEqual({ ok: true });
+    expect(claimPath).toBe(`/g/${projectId}-chat-core-temp/project`);
+    expect(live.window.location.pathname).toBe(`/g/${projectId}-chat-core-temp/c/${chatB}`);
+    expect(live.sent.filter(message => message.type === 'desktop_input' && message.ack)).toEqual([
+      expect.objectContaining({ conversationId: chatB })
+    ]);
+  });
   it.each(['accepted', 'refused', 'new-question', 'draft'])('direct delivery stops only the claimed source turn before normal Send (%s)', async change => {
     let directTurn: { id: string; startedAt: number };
     live = await nonProHarness(`https://chatgpt.com/c/${chatA}`, {
@@ -15899,7 +15940,7 @@ describe('the goal loop', () => {
       expect(looping.objective.actions.map((action) => action.label)).toEqual(['edit task']);
       expect(looping.objective.actions[0]!.mode).toBe('loop');
       expect(looping.mode!.note).toBe('replies for ever');
-      expect(looping.tip).toContain('never stops on its own');
+      expect(looping.tip).toContain('verifies and repairs until this job converges');
     });
 
     /**

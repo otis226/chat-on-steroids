@@ -65,7 +65,6 @@ export async function astraFinishOnly(sessionId: string, conversationId: string)
 }
 import { resumeBootstrapMatches, resumeBootstrapText } from './session/handoff.js';
 import {
-  GOAL_LOOP_STOP_REFUSED,
   GOAL_LOOP_TRAILER,
   GOAL_OBJECTIVE_OPENING_TURN,
   GOAL_OBJECTIVE_TRAILER,
@@ -191,17 +190,6 @@ const MODEL_CONTROL_TOKEN = /<\|[^|\r\n]{1,100}\|>|<\/?s>|\[\/?INST\]|<<\/?SYS>>
 /** Reasoning wrappers are not formatting; their contents are never a user message. */
 const UNSAFE_REASONING_TAG = /<\/?(?:think|analysis|reasoning)\b[^>]*>/iu;
 
-/**
- * How many times one loop draft may be asked again after it tried to stop anyway.
- *
- * Structured output already removes `stop` from the loop's vocabulary, so this only catches
- * the model writing the sentinel into the message text — rare, and usually gone on the next
- * attempt. It is bounded because the alternative is a chat that silently spends a key in a
- * circle; past the last attempt the draft fails *retryably* and the page's own Goal loop asks
- * again on its clock, which is the one place that knows whether this turn is still the last one.
- */
-const LOOP_ATTEMPTS = 3;
-
 /** App-owned transport contract. The editable prompt decides policy, never wire syntax. */
 const GOAL_OUTPUT_PROTOCOL =
   'Return only the app decision described by the response schema. Use action "stop" when the editable instruction would say NO_REPLY. ' +
@@ -233,16 +221,12 @@ const GOAL_RESPONSE_FORMAT = {
 } as const;
 
 /**
- * Loop's transport contract: the same envelope with the stop half taken out.
- *
- * The editable instruction says the loop never stops, and this is the same statement made
- * where a model cannot argue with it — `continue` is the only value the enum admits, so a
- * provider honouring the schema has no way to spell the answer this mode does not accept.
- * The prompt remains the thing that decides *what* to write; this only removes the exit.
+ * Loop uses the same two-way transport as Goal, but its prompt requires iterative verification
+ * before it may stop. That lets a long-running loop converge instead of inventing busywork.
  */
 const LOOP_OUTPUT_PROTOCOL =
-  'Return only the app decision described by the response schema. Action is always "continue" — there is no stop, and no message may be skipped. ' +
-  'Put the exact next user message in reply, and put no reasoning, counting, labels, tokenizer markers, or protocol words in it.';
+  'Return only the app decision described by the response schema. Use action "continue" with the exact next user message while requested work, verification, repair, or closure review is still needed. ' +
+  'Use action "stop" only when the original requested job is complete and its closure check has passed, or when the only remaining blocker requires information only the real user can provide. Put no reasoning, counting, labels, tokenizer markers, or protocol words in reply.';
 
 const LOOP_RESPONSE_FORMAT = {
   type: 'json_schema',
@@ -254,12 +238,12 @@ const LOOP_RESPONSE_FORMAT = {
       properties: {
         action: {
           type: 'string',
-          enum: ['continue'],
-          description: 'always continue; this mode never stops on its own'
+          enum: ['stop', 'continue'],
+          description: 'continue while requested work or closure verification remains; stop only after the original job has converged or a real-user-only decision is required'
         },
         reply: {
           type: 'string',
-          description: 'the short message to send as the user; never empty'
+          description: 'empty for stop; for continue, only the short next user message'
         }
       },
       required: ['action', 'reply'],
@@ -288,7 +272,7 @@ export function goalLoopPrompt(): string {
  *
  * Read through the master switch on purpose. A chat that runs only because it carries its own
  * saved objective, with the standing switch off, is not a chat the user switched Loop on for —
- * and Loop is the mode that never stops by itself, so it is never entered by inheritance.
+ * Loop adds the explicit verification/repair closure policy, so it is never entered by inheritance.
  */
 export function goalDrivingMode(conversationId?: string): GoalMode {
   const goal = conversationId ? goalSwitchFor(conversationId) : getConfig().goal;
@@ -602,6 +586,43 @@ function handleGoalReply(conversationId: string, turnId?: string): void {
   if (!reply || reply.state !== 'pending' || (turnId && reply.turnId !== turnId)) return;
   reply.state = 'handled';
   persistGoalRepliesSoon();
+}
+
+/**
+ * Whether an explicit Goal/Loop On may re-arm this stable reply.
+ *
+ * A handled reply is deliberately retained so Off -> On can resume the latest stable final
+ * when nothing else happened in the chat. It is not permission to replay history after the
+ * conversation moved on. The live failure behind this guard was a completed reply whose row
+ * stayed in the ledger while later turns started; toggling Goal Off -> On then re-armed that
+ * older row, and its recovery path repeatedly reopened the chat while trying to settle work
+ * that was no longer current.
+ *
+ * The recorder's event sequence is the authority here. A later authored turn/message means the
+ * stable reply is historical. A later attributed tool call also means work continued beyond
+ * the supposed final; compare its original event time as well as seq so delayed attribution of
+ * work that actually happened before the final does not make a current reply look stale.
+ *
+ * Fail closed when the source final has fallen outside the bounded tail: automatic replay of an
+ * old answer is more harmful than waiting for the next real final.
+ */
+async function goalReplyMayRearm(reply: GoalReplyObligation): Promise<boolean> {
+  const session = await getSession(reply.sessionId);
+  const [source] = await readRecentEvents(reply.sessionId, 1, {
+    kinds: ['assistant_message'],
+    before: reply.eventSeq + 1
+  });
+  // Direct/durable callers can create a tombstone without a session recorder. Preserve that
+  // contract, but fail closed for a real session whose source final can no longer be proven.
+  if (!session) return !source;
+  if (session.conversationId !== reply.conversationId) return false;
+  if (!source || source.seq !== reply.eventSeq) return false;
+  const events = await readRecentEvents(reply.sessionId, 256, {
+    kinds: ['assistant_message', 'user_message', 'turn_start', 'tool_call']
+  });
+  const newer = events.filter(event => event.seq > reply.eventSeq);
+  if (newer.some(event => event.kind !== 'tool_call')) return false;
+  return !newer.some(event => event.kind === 'tool_call' && event.time >= source.time);
 }
 
 /** Durable state file for per-chat Goal objectives. */
@@ -1156,10 +1177,12 @@ export async function setGoalReplyActiveNow(conversationId: string, active: bool
   if (!before) return Boolean(draft);
 
   const previous = { ...before };
-  before.state = active ? 'pending' : 'handled';
-  // A deliberate On is a new pickup episode for the same stable final reply. It gets the
-  // recovery schedule from now, not from when that answer happened under an Off switch.
-  if (active) before.acceptedAt = Math.max(Date.now(), previous.acceptedAt + 1);
+  const rearm = active && await goalReplyMayRearm(before);
+  before.state = rearm ? 'pending' : 'handled';
+  // A deliberate On is a new pickup episode only while this is still the chat's current stable
+  // final. Once newer work exists, retaining the row is only a tombstone and On waits for the
+  // next real final instead of replaying history.
+  if (rearm) before.acceptedAt = Math.max(Date.now(), previous.acceptedAt + 1);
   try {
     await writeDurableNow(GOAL_REPLIES_STATE, snapshotGoalReplies());
   } catch (error) {
@@ -1387,6 +1410,7 @@ async function requestGoalDecision(request: GoalRequest): Promise<GoalDecision |
       sourceSessionId: request.sourceSessionId, conversationId: helper?.[0] ?? null,
       lifetime: request.lifetime,
       publish: request.publish,
+      ...(settings.helperProject ? { helperProject: settings.helperProject } : {}),
       model: settings.helperModel ?? 'gpt-5.6-sol', reasoningEffort: settings.helperReasoning ?? 'high'
     }), false);
     request.signal.throwIfAborted();
@@ -1464,31 +1488,17 @@ async function requestGoalDecision(request: GoalRequest): Promise<GoalDecision |
 }
 
 /**
- * One decision the caller may act on, with Loop's single addition: a stop is not one.
+ * One bounded driver decision the caller may act on.
  *
- * In `goal` mode this is exactly `requestGoalDecision` — one request, one answer, no retry, for
- * all the reasons written above it. In `loop` mode the model has been told it never stops and
- * handed a schema with no way to say so, so a stop reaching this point means it wrote the
- * sentinel into the message text instead. That is a malformed answer rather than a decision,
- * and the honest repair is to ask again with the refusal spelled out — never to type a sentence
- * this app wrote and attribute it to the model.
- *
- * Everything else — a provider error, a cut stream, an unreadable shape — is passed straight
- * back, because whether *those* are worth asking again is the page's call and not this one's.
+ * Goal may stop at the requested finish line. Loop may also stop, but its prompt makes that
+ * legitimate only after the same job has survived implementation, verification/repair and the
+ * bounded closure check (or only a real-user blocker remains). Provider errors and malformed
+ * output are returned as-is; this layer never invents a continuation on the model's behalf.
  */
 async function requestDrivingDecision(
   request: GoalRequest
 ): Promise<GoalDecision | { action: 'http'; error: string; retryAfterMs?: number }> {
-  let decision = await requestGoalDecision(request);
-  if (request.mode !== 'loop') return decision;
-  for (let attempt = 1; attempt < LOOP_ATTEMPTS && decision.action === 'stop'; attempt += 1) {
-    logWarn(`goal: the loop tried to stop with ${request.model}; asking again (${attempt}/${LOOP_ATTEMPTS - 1})`);
-    decision = await requestGoalDecision({
-      ...request,
-      system: [...request.system, GOAL_LOOP_STOP_REFUSED]
-    });
-  }
-  return decision;
+  return requestGoalDecision(request);
 }
 
 async function run(draft: GoalDraft): Promise<void> {
@@ -1560,20 +1570,7 @@ async function run(draft: GoalDraft): Promise<void> {
       return settle(draft, 'failed', decision.error);
     }
     if (decision.action === 'stop') {
-      // Loop has already been asked again for exactly this, up to its limit. Reaching here
-      // means the model kept refusing to write, which is a failure to produce an answer and
-      // not a decision to stay silent — so the turn stays owed one. The failure is deliberately
-      // outside SETTLED_FAILURE: the page retries it on its own clock, where it can still see
-      // whether this turn is the last one.
-      if (draft.mode === 'loop') {
-        logWarn(`goal: the loop would not write a message in ${draft.conversationId} with ${draft.model}`);
-        return settle(draft, 'failed', 'loop_stop_refused');
-      }
-      logInfo(`goal: ${draft.model} says the goal is met in ${draft.conversationId}; nothing was sent`);
-      // Reaching the goal ends this Goal run, not the user's saved objective. Keeping the text
-      // lets a reopened chat show what it was pursuing and lets a later manual correction such
-      // as "that did not work" continue against the same objective. Nothing auto-restarts here:
-      // the browser still needs a genuinely new turn ending before it can request another draft.
+      logInfo(`goal: ${draft.model} says ${draft.mode === 'loop' ? 'the loop converged' : 'the goal is met'} in ${draft.conversationId}; nothing was sent`);
       draft.reply = '';
       return settle(draft, 'no-reply');
     }
@@ -1646,10 +1643,7 @@ export async function draftFastFollowup(sessionId: string, signal: AbortSignal =
         signal.throwIfAborted();
         throw nativeGoalFailure(`request_failed: ${error instanceof Error ? error.message : error}`, backend);
       });
-  if (decision.action === 'stop') {
-    if (mode === 'loop') throw new Error('loop_stop_refused');
-    return null;
-  }
+  if (decision.action === 'stop') return null;
   if (decision.action !== 'continue') throw nativeGoalFailure('error' in decision ? decision.error : 'Goal did not return a usable follow-up', backend,
     'retryAfterMs' in decision ? decision.retryAfterMs : undefined);
   return decision.reply;

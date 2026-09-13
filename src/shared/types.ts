@@ -250,14 +250,17 @@ export interface GoalSettings {
   includeToolCalls?: boolean;
   helperModel?: string;
   helperReasoning?: ReasoningEffort;
+  /** Exact native ChatGPT Project name used for non-temporary helper chats. Blank keeps them unfiled. */
+  helperProject?: string;
   backend?: GoalBackend;
   loopBackend?: 'api' | 'chatgpt';
   enabled: boolean;
   /**
-   * `goal` stops when the job is done; `loop` never stops on its own.
+   * `goal` stops when the requested finish line is met; `loop` iterates through verification
+   * and repair and may stop after its bounded closure pass proves the same job has converged.
    *
    * Only consulted while `enabled` is true. A chat driven solely by its own saved objective
-   * with the switch off runs as `goal`, because Loop is a thing the user switches on.
+   * with the switch off runs as `goal`, because Loop is a mode the user explicitly selects.
    */
   mode: GoalMode;
   provider: GoalProviderSettings;

@@ -13,7 +13,8 @@ export const DEFAULT_GOAL_MODEL = 'z-ai/glm-5.3';
  *
  * They differ in where the finish line comes from. The gate below infers it from what the user
  * already asked for in the conversation. The driver further down is given it up front. The loop
- * after that has none at all: it is the mode that never stops on its own.
+ * after that drives the same brief through a bounded verification/repair closure pass before it
+ * may stop.
  *
  * All are laid out in the order the model reads: who you are and the moves you have, then where
  * the requirements come from, then worked examples, then the conversation, then a closing
@@ -309,20 +310,12 @@ You write: "leave that test for now. the whole job is scraper, csv export, sched
 
 Your entire output is exactly one thing: the next user message. Never NO_REPLY, never an empty message, never anything else.`;
 
-/** Every default this app has ever shipped for the loop, oldest first. Same fence as the others. */
-export const SUPERSEDED_GOAL_LOOP_SYSTEM_PROMPTS: readonly string[] = [
-  PREVIOUS_DEFAULT_GOAL_LOOP_SYSTEM_PROMPT
-];
-
 /**
- * The third Goal model: not a gate, not a driver — a loop.
+ * Historical Loop defaults kept for migration.
  *
- * The gate asks "has ChatGPT finished what it was asked?", the driver asks "is the stated goal
- * reached?", and both are allowed to answer with no message at all. This one is not. Loop mode
- * exists for the run that is meant to keep going: the user switched it on, and the only thing
- * that ends it is the user switching it off again. So the instruction below has one move where
- * the other two have two, and the app enforces that at the wire as well — see
- * LOOP_RESPONSE_FORMAT in src/main/goal.ts, which never offers the model a way to spell "stop".
+ * These strings describe the former endless-loop contract and are intentionally preserved byte
+ * for byte so untouched persisted settings can migrate to the current convergent Loop prompt.
+ * They are history, not the current product contract.
  *
  * That single rule creates the failure modes this wording spends most of its length on: a model
  * that must always speak will circle one small detail forever, and a model that must always
@@ -343,7 +336,7 @@ export const SUPERSEDED_GOAL_LOOP_SYSTEM_PROMPTS: readonly string[] = [
  * more precision, a higher standard. Never a different job. "Improve it" is a direction along the
  * user's own brief, not permission to start a second one.
  */
-export const DEFAULT_GOAL_LOOP_SYSTEM_PROMPT = `Your job is to prompt ChatGPT. You are the loop sitting in the user's seat, and the only thing you ever produce is the next message that user would type.
+export const PREVIOUS_DEFAULT_GOAL_LOOP_SYSTEM_PROMPT_V2 = `Your job is to prompt ChatGPT. You are the loop sitting in the user's seat, and the only thing you ever produce is the next message that user would type.
 
 Here is the exact situation. A person has work they want finished, and they have handed you the wheel. If a goal is stated verbatim in a system message below, that goal is the work. If there is none, the work is whatever that person already asked for in the conversation itself — read it out of the messages labelled "user". The messages labelled "user" are yours to write from here on, the messages labelled "assistant" are ChatGPT's answers.
 
@@ -398,17 +391,16 @@ You write: "no dashboard, no rewrite, that's not the job. the csv still has no h
 
 Your entire output is exactly one thing: the next user message. Never NO_REPLY, never an empty message, never anything else.`;
 
-/** Loop's closing reminder, placed after the transcript for the same reason as the other two. */
-export const GOAL_LOOP_TRAILER = `That was the conversation. Now write the next message as the user. You must write one — stopping, silence and NO_REPLY do not exist here. Go back to the user's own requirements, not to ChatGPT's account of them, and carry them into your message in full: name what is still not done and spell out exactly what you want to see, at whatever length that takes. If everything looks finished, tell it to go over the whole thing again and raise the bar — deeper into the same requirements, more demanded each pass, never a different job. Write in the user's language and register, and write nothing except that message.`;
+export const DEFAULT_GOAL_LOOP_SYSTEM_PROMPT = "Your job is to prompt ChatGPT from the user's seat so one existing job reaches a verified finish. Your output is either the next user message or exactly NO_REPLY.\n\nFind the job from the user's own messages. If a goal is supplied verbatim below, that goal is authoritative. Re-read the whole original request every pass. ChatGPT's summaries, plans and claims of completion are evidence, not requirements.\n\nWork toward convergence, not endless activity. Continue while any requested item is missing, only planned, failing, unverified, blocked by something ChatGPT can resolve, or contradicted by the evidence. Push the same job through implementation, verification, review, repair and re-verification. Be specific about the unfinished requirement, the failing case, the file or behaviour, and the evidence you want next. Do not send a bare \"continue\".\n\nDo not drift. Never invent a new feature, rewrite, cleanup project or higher standard just because the requested job looks complete. Going deeper is allowed only when it directly verifies or repairs something implied by the user's actual requirements.\n\nUse a bounded closure pass. If ChatGPT first reports that everything is done but the transcript does not yet contain convincing end-to-end evidence for the user's requirements, ask for one closure audit: compare the result against the original request, run the relevant real tests or workflow, inspect failures, repair any defects found, and report what remains uncovered. If that closure audit finds a defect, ask for the defect to be fixed and the affected checks rerun.\n\nStop once the work has converged. If a previous loop message already requested the closure audit and ChatGPT completed it with no new defect, no failing required check, no unresolved requested item and no unanswered user question, output exactly NO_REPLY. Do not ask for another review, another polish pass or another \"raise the bar\" cycle. Likewise, if the only remaining blocker needs information or a decision that only the real user can provide and cannot be inferred from their messages, output exactly NO_REPLY instead of guessing.\n\nWhen ChatGPT asks a question that the user's existing messages already answer, answer it briefly and keep the same job moving. Never fabricate a decision the user did not make.\n\nWrite in the user's language and register. You are not a reviewer or commentator; do not summarize or praise ChatGPT. Your whole output is one of:\n- the next user message\n- exactly NO_REPLY\n\nNothing else.";
 
-/**
- * What the loop is told after it tried to stop anyway.
- *
- * Structured output already removes the word from its vocabulary, so reaching this means the
- * model wrote the sentinel into the message text itself. The request is then simply made again
- * with this appended, rather than typing a sentence the model never wrote.
- */
-export const GOAL_LOOP_STOP_REFUSED = `Your previous answer tried to end the conversation. That is not available to you: this loop only ever writes the next user message. Write that message now — name what is still unfinished against the user's own requirements, or, if it all looks done, tell ChatGPT to go back over the whole job and raise the bar on it.`;
+/** Every default this app has ever shipped for the loop, oldest first. */
+export const SUPERSEDED_GOAL_LOOP_SYSTEM_PROMPTS: readonly string[] = [
+  PREVIOUS_DEFAULT_GOAL_LOOP_SYSTEM_PROMPT,
+  PREVIOUS_DEFAULT_GOAL_LOOP_SYSTEM_PROMPT_V2
+];
+
+/** Loop's closing reminder, placed after the transcript for the same reason as the other two. */
+export const GOAL_LOOP_TRAILER = "That was the conversation. Re-read the user's original requirements and decide whether the same job still needs work. Continue only for a concrete missing requirement, failed or missing verification, repair, or the single closure audit. If the closure audit already passed with no new defect or required work, answer exactly NO_REPLY. Never invent another polish or \"raise the bar\" cycle after convergence. Write only the next user message or exactly NO_REPLY, in the user's language and register.";
 
 /** How the goal itself is put to the model, kept beside the instruction that refers to it. */
 export function goalObjectiveMessage(objective: string): string {

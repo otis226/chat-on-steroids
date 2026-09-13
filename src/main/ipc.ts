@@ -176,6 +176,7 @@ const settingsPatch = z.object({
       loopBackend: z.enum(['api', 'chatgpt']).optional(),
       helperModel: z.string().trim().min(1).max(80).optional(),
       helperReasoning: z.enum(REASONING_EFFORTS).optional(),
+      helperProject: z.string().trim().max(160).optional(),
     enabled: z.boolean(),
     // Which of the two standing modes the switch runs. One field, so the renderer has no way
     // to describe a state where Goal and Loop are both on.
@@ -306,6 +307,7 @@ function mergeSettings(current: Config, base: SettingsSnapshot, wanted: Settings
       loopBackend: pick(current.goal.loopBackend, base.goal.loopBackend, wanted.goal.loopBackend),
       helperModel: pick(current.goal.helperModel, base.goal.helperModel, wanted.goal.helperModel),
       helperReasoning: pick(current.goal.helperReasoning, base.goal.helperReasoning, wanted.goal.helperReasoning),
+      helperProject: pick(current.goal.helperProject, base.goal.helperProject, wanted.goal.helperProject),
       enabled: pick(current.goal.enabled, base.goal.enabled, wanted.goal.enabled),
       mode: pick(current.goal.mode, base.goal.mode, wanted.goal.mode),
       provider: {
@@ -425,6 +427,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
       before.goal.backend !== next.goal.backend ||
       before.goal.loopBackend !== next.goal.loopBackend ||
       before.goal.helperModel !== next.goal.helperModel || before.goal.helperReasoning !== next.goal.helperReasoning ||
+      before.goal.helperProject !== next.goal.helperProject ||
       before.goal.provider.kind !== next.goal.provider.kind ||
       before.goal.provider.baseUrl !== next.goal.provider.baseUrl ||
       before.goal.reasoning !== next.goal.reasoning ||

@@ -1783,6 +1783,35 @@ async function createChatTab(url, background = false, active = !background) {
   });
 }
 
+// A minimized Chromium window does not mount ChatGPT's native sidebar on current builds, so a
+// fresh helper cannot select its configured Project while the app-owned background window stays
+// minimized. Reveal only that already-owned window, never focus it, and put it back as soon as
+// the helper has proved the Project transition by claiming its input. A bounded fallback covers
+// missing/changed provider UI without leaving an app-owned window visible indefinitely.
+const helperProjectWindowReveals = new Map();
+async function settleHelperProjectWindow(id) {
+  const reveal = helperProjectWindowReveals.get(id);
+  if (!reveal) return;
+  helperProjectWindowReveals.delete(id);
+  clearTimeout(reveal.timer);
+  try {
+    const window = await chrome.windows.get(reveal.windowId);
+    // If the user deliberately focused the revealed window, their action wins over background
+    // cleanup. Otherwise restore the exact app-owned window to its normal minimized policy.
+    if (window?.focused === true) return;
+    await chrome.windows.update(reveal.windowId, { state: 'minimized', focused: false });
+  } catch { /* closing the owned window is already a complete cleanup */ }
+}
+async function revealHelperProjectWindow(input, tab, background) {
+  if (!background || !input?.helperProject || input.conversationId || input.lifetime === 'temporary-planner' ||
+      !Number.isInteger(tab?.windowId) || helperProjectWindowReveals.has(input.id)) return;
+  const window = await storedBackgroundWindow();
+  if (!window || window.id !== tab.windowId || window.state !== 'minimized') return;
+  await chrome.windows.update(window.id, { state: 'normal', focused: false });
+  const timer = setTimeout(() => { void settleHelperProjectWindow(input.id); }, 30_000);
+  helperProjectWindowReveals.set(input.id, { windowId: window.id, timer });
+}
+
 /** Bound waiting for a page; a missing reply never grants action or replay authority. */
 async function tabReply(tabId, message, options, timeoutMs = 3000) {
   let timer;
@@ -1929,7 +1958,9 @@ async function deliverDesktopInputs(inputs, background, reusableConversations = 
           if (prepared?.ready === true && matchesInput(input, latest)) {
             await elect(input.id, { tab: candidate.id, stage: 'ready' });
             tab = latest;
-            offerDesktopInput(tab.id, { type: 'clf-desktop-input', id: input.id, conversationId: null });
+            await revealHelperProjectWindow(input, tab, background);
+            offerDesktopInput(tab.id, { type: 'clf-desktop-input', id: input.id, conversationId: null,
+              ...(input.helperProject ? { helperProject: input.helperProject } : {}) });
           } else if (prepared?.fallback === true && prepared.preSend === true) {
             // Explicit native transition failure, before claim/insertion/send, owns
             // exactly one replacement. Persist that expenditure before Chrome awaits.
@@ -1948,8 +1979,10 @@ async function deliverDesktopInputs(inputs, background, reusableConversations = 
       tabs.push(tab);
       continue;
     }
+    await revealHelperProjectWindow(input, tab, background);
     offerDesktopInput(tab.id, { type: 'clf-desktop-input', id: input.id, conversationId: target,
-      ...(input.directTurn ? { directTurn: input.directTurn } : {}), ...(input.lifetime ? { lifetime: input.lifetime } : {}) });
+      ...(input.directTurn ? { directTurn: input.directTurn } : {}), ...(input.lifetime ? { lifetime: input.lifetime } : {}),
+      ...(input.helperProject ? { helperProject: input.helperProject } : {}) });
   }
 }
 
@@ -2683,6 +2716,9 @@ const HANDLERS = {
     const result = await call(typeof message.partial === 'string' ? '/input/progress' : typeof message.response === 'string' ? '/input/answer' : message.fail === true ? '/input/fail' : message.ack === true ? '/input/ack' : '/input/claim', {
       method: 'POST', body: JSON.stringify({ id, owner, conversationId, requiresAuthorization: message.requiresAuthorization === true, authorize: message.authorize === true, partial: typeof message.partial === 'string' ? message.partial.slice(-8000) : undefined, messageId: typeof message.messageId === 'string' ? message.messageId : undefined, error: message.error, response: typeof message.response === 'string' ? message.response.slice(0, 16001) : undefined })
     });
+    if (result.ok && (message.requiresAuthorization === true || message.ack === true || message.fail === true || typeof message.response === 'string')) {
+      void settleHelperProjectWindow(id);
+    }
     if (typeof message.response === 'string' && message.lifetime !== 'temporary-planner' && result.ok && result.data?.ok === true && ownsDocument(source)) {
       // Accepting the answer retires the helper's work, not the user's tab or draft.
       // Use the same live page proof as maintenance before the final physical close.
@@ -3014,8 +3050,27 @@ const HANDLERS = {
     // ChatGPT assigns /c/B through an SPA transition. Read Chrome's current tab and
     // retain the exact document/epoch lease across that await before accepting its route.
     const tab = await chrome.tabs.get(source.tab).catch(() => null);
-    if (!ownsDocument(source) || !tab || tab.pendingUrl || tab.status === 'loading' ||
-        !isChatGptUrl(tab.url) || conversationFromUrl(tab.url) !== cleanConversationId(message.conversationId))
+    if (!ownsDocument(source) || !tab || !isChatGptUrl(tab.url || tab.pendingUrl))
+      return { ok: false, error: 'stale_document' };
+    const named = cleanConversationId(message.conversationId);
+    // A checkpoint that names a chat has a route to verify, and an unsettled tab cannot prove
+    // it: wait for the navigation rather than accept a message about a chat this tab may be
+    // leaving. A checkpoint that names none is the opposite case and has to be judged
+    // differently — the two destination checkpoints come from a replacement chat that ChatGPT
+    // has not created yet, so there is no id to compare and no navigation to lose.
+    //
+    // Refusing those on `loading` cost a whole handoff every time the fresh tab was slower than
+    // the page asking for its permit. Measured on 2026-09-10: the tab redeemed its brief at
+    // 04:39:55.218 and asked for `destinationAttempt` at 04:39:58.262, three seconds into a
+    // ChatGPT that was still loading. The refusal never reached the app, content.js read it as
+    // a denied permit, cleared the composer and returned without an ack, and the app waited out
+    // its deadline with nothing anywhere to say why.
+    //
+    // `ownsDocument` already proved this is the document the worker leased; all that is left to
+    // exclude is a tab that is actually showing some other conversation.
+    if (named
+      ? (tab.pendingUrl || tab.status === 'loading' || conversationFromUrl(tab.url) !== named)
+      : conversationFromUrl(tab.url) !== null)
       return { ok: false, error: 'stale_document' };
     const sourceUrl = tab.url;
     const result = await call('/compact', {

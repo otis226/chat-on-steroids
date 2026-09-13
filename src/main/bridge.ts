@@ -7189,7 +7189,8 @@ function describe(command: Command, client: string | null, claimedSummary?: stri
 
 function drop(command: Command, why: string): boolean {
   if (!commands.includes(command)) return false;
-  const automaticEntry = command.spec.type === 'resume' ? continuationByToken(command.spec.token) : null;
+  const resumeToken = command.spec.type === 'resume' ? command.spec.token : null;
+  const automaticEntry = resumeToken ? continuationByToken(resumeToken) : null;
   const automaticResume =
     automaticEntry?.automatic === true && automaticEntry.state !== 'committing' && automaticEntry.state !== 'committed';
   if (automaticResume) {
@@ -7199,6 +7200,26 @@ function drop(command: Command, why: string): boolean {
     logWarn(`bridge: released ${specKey(command.spec)} browser attempt without closing its ticket — ${why}`);
     changed();
     persistCommands();
+    // The claim goes with the command, exactly as it does when a page reports the loss itself.
+    //
+    // Redeeming is what claims the brief, and the claim names *this* command. Keeping the
+    // ticket while retiring the command it is claimed by leaves a ticket no later pickup can
+    // ever redeem: every pickup is a fresh id, `claimedBy` never matches one again, and
+    // `claimContinuationNow` refuses for the rest of the six-hour TTL. Observed on 2026-09-09
+    // as four pickups, four opened tabs and four pages that stopped without typing, without an
+    // ack and without a log line — the retry this branch exists to allow, made impossible by
+    // the same branch.
+    //
+    // `destinationLost` takes this transition already, but only a page that survived its send
+    // sends it; a page that dies before one never does. Gated on `not-attempted` so this can
+    // only ever release a brief that provably was not submitted — releasing a dispatched one
+    // is the double-send that `releaseContinuationDestinationSendNow` refuses for `sent`.
+    if (resumeToken && automaticEntry?.destinationSend?.state === 'not-attempted') {
+      void releaseContinuationDestinationSendNow(resumeToken)
+        .catch(() => undefined)
+        .finally(() => scheduleDeliver());
+      return true;
+    }
     scheduleDeliver();
     return true;
   }

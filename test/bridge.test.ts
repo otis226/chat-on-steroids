@@ -193,6 +193,30 @@ async function compactedSession(from: string, brief: string): Promise<{ sessionI
   return { sessionId, token: await readyContinuation(sessionId, brief, from) };
 }
 
+/**
+ * The same, but the ticket the app files for itself rather than one the user asked for.
+ *
+ * Automatic tickets take a different failure path: a manual resume that never reports back is
+ * aborted, an automatic one keeps its ticket for a later pickup. Only the automatic one can
+ * reach the state this file's claim test is about.
+ */
+async function automaticCompactedSession(from: string, brief: string): Promise<{ sessionId: string; token: string }> {
+  const reply = await request('POST', '/events', {
+    body: {
+      conversationId: from,
+      events: [{ kind: 'user_message', time: Date.now(), text: 'do the work', messageId: `m-${from}` }]
+    }
+  });
+  const sessionId = reply.body.sessionId as string;
+  expect(sessionId, 'the chat was not recorded, so there is no session to compact').toBeTruthy();
+  const ticket = await openContinuationNow(sessionId, from, true);
+  const stored = await attachSummary(ticket.token, `${brief}
+
+${SAMPLE_BRIEF}`);
+  expect(stored, 'the brief was not stored, so there is no resume to queue').not.toBeNull();
+  return { sessionId, token: ticket.token };
+}
+
 /** Every URL the app asked the OS to open, in order. Stands in for Electron's shell. */
 const opened: string[] = [];
 let anonymousRedeemIndex = 0;
@@ -4650,6 +4674,58 @@ describe('targeted open', () => {
     }
   });
 
+  /**
+   * The claim outliving the command that made it.
+   *
+   * Redeeming is what claims the brief: the app records the redeeming command as `claimedBy` so
+   * a second tab on the same marker cannot be handed the same handoff twice. An *automatic*
+   * ticket deliberately survives a failed attempt — `drop()` retires the command and keeps the
+   * ticket, so a later pickup can try again — but the claim was never released with it, and
+   * every later pickup is a *new* command id which can therefore never equal `claimedBy`.
+   *
+   * `claimContinuationNow` then returns null for the rest of the ticket's six-hour life, the
+   * command is handed out with an empty brief, and the page stops without typing, without an
+   * ack and without a log line. Observed on 2026-09-09: four pickups, four opened tabs, four
+   * silent stops, `claimedBy` still naming the first tab's command hours after it was closed.
+   *
+   * Nothing here was ever submitted — `destinationSend` never leaves `not-attempted` — so
+   * releasing the claim cannot re-send anything.
+   */
+  it('lets the next pickup claim a brief whose first chat died before typing anything', async () => {
+    vi.useFakeTimers();
+    try {
+      setBrowserOpener(async (url) => {
+        opened.push(url);
+      });
+      await pair();
+      const { sessionId, token } = await automaticCompactedSession(
+        '55555555-6666-7777-8888-999999999999',
+        'the wedged brief'
+      );
+      const first = queueResume(sessionId, token)!;
+      await waitForOpened(1);
+
+      // The chat opens and its page redeems, which is the act that claims the brief. Then the
+      // tab is closed: nothing is typed, nothing is acked, nothing is reported.
+      expect((await redeem(first.id, 'tab-1')).text).toContain('the wedged brief');
+      expect(continuationByToken(token)?.destinationSend.state).toBe('not-attempted');
+
+      // The command's own deadline passes with nothing reported.
+      await vi.advanceTimersByTimeAsync(16 * 60_000);
+
+      // An automatic ticket is kept on purpose — this is the state a later pickup exists for.
+      expect(continuationByToken(token)?.state).not.toBe('aborted');
+      expect(pendingCommands().some((entry) => entry.id === first.id)).toBe(false);
+
+      // So the next pickup, whose id is necessarily different, has to be able to carry it.
+      const second = queueResume(sessionId, token)!;
+      expect(second.id).not.toBe(first.id);
+      expect((await redeem(second.id, 'tab-2')).text).toContain('the wedged brief');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('withdraws a cancelled resume so no tab opens for it afterwards', async () => {
     setBrowserOpener(async (url) => {
       opened.push(url);
@@ -8584,6 +8660,52 @@ describe('the goal loop over the bridge', () => {
         replies: expect.arrayContaining([expect.objectContaining({ conversationId: chat, replyId: 'objective-new-final', state: 'pending' })])
       });
     }
+  });
+
+  it('does not re-arm an old stable reply after the chat has moved into a newer turn', async () => {
+    await pair();
+    const chat = 'cafe0075-0000-4000-8000-000000000075';
+    const first = await request('POST', '/events', {
+      body: {
+        conversationId: chat,
+        events: [
+          { kind: 'user_message', time: Date.now(), text: 'finish this pass', messageId: 'm-stale-rearm' },
+          {
+            kind: 'assistant_message',
+            time: Date.now() + 1,
+            messageId: 'a-stale-rearm',
+            turnId: 'turn-stale-rearm',
+            text: 'This pass is complete.',
+            state: 'final',
+            final: true,
+            goalEligible: true,
+            activeNow: true
+          }
+        ]
+      }
+    });
+    expect(first.status).toBe(200);
+    expect(goalPendingReplyFor(chat)).toMatchObject({ replyId: 'a-stale-rearm' });
+
+    expect((await request('POST', '/settings', { body: { conversationId: chat, goal: false } })).status).toBe(200);
+    expect(goalPendingReplyFor(chat)).toBeNull();
+
+    // This is the live failure shape: the old final remains the newest accepted Goal row, but
+    // the provider has already entered another turn before the user re-enables Goal.
+    await request('POST', '/events', {
+      body: {
+        conversationId: chat,
+        events: [{ kind: 'turn_start', time: Date.now() + 2, turnId: 'turn-after-stale-final' }]
+      }
+    });
+
+    expect((await request('POST', '/settings', { body: { conversationId: chat, goal: true } })).status).toBe(200);
+    expect(goalPendingReplyFor(chat)).toBeNull();
+    expect(await readDurable<{ replies: Array<{ conversationId: string; replyId: string; state: string }> }>(GOAL_REPLIES_STATE)).toMatchObject({
+      replies: expect.arrayContaining([
+        expect.objectContaining({ conversationId: chat, replyId: 'a-stale-rearm', state: 'handled' })
+      ])
+    });
   });
 
   it('makes Goal Off a durable ticket cancel and On a fresh pickup of the same final', async () => {

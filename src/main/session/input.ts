@@ -52,6 +52,7 @@ const entrySchema = inputArgs.extend({
   purpose: z.enum(['user', 'decision']).optional(),
   lifetime: z.literal('temporary-planner').optional(),
   decisionSourceSessionId: z.string().min(8).max(64).optional(),
+  helperProject: z.string().trim().max(160).optional(),
   response: z.string().max(16000).optional(),
   state: z.enum(['queued', 'browser', 'tool', 'sent', 'cancelled', 'failed', 'decision']),
   offeredAt: z.number().optional(),
@@ -558,9 +559,9 @@ async function completedStageBoundary(entry: InputEntry, current: InputEntry[]):
       row.dueAt <= Date.now() && ['queued', 'browser', 'tool'].includes(row.state))) return null;
   return end.turnId;
 }
-export function pendingBrowserInputs(): Promise<Array<{ id: string; conversationId: string | null; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner' }>> {
+export function pendingBrowserInputs(): Promise<Array<{ id: string; conversationId: string | null; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; helperProject?: string }>> {
   return serial(async () => {
-    const result: Array<{ id: string; conversationId: string | null; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner' }> = [];
+    const result: Array<{ id: string; conversationId: string | null; directTurn?: InputEntry['directTurn']; supersededConversationId?: string; lifetime?: 'temporary-planner'; helperProject?: string }> = [];
     const current = await load();
     for (const entry of ordered(current)) {
       if (!preparable(entry) || entry.dueAt > Date.now()) continue;
@@ -572,7 +573,8 @@ export function pendingBrowserInputs(): Promise<Array<{ id: string; conversation
           ...(entry.directTurn ? { directTurn: entry.directTurn } : {}),
           ...(entry.state === 'queued' && entry.purpose !== 'decision' && entry.sessionId && entry.conversationId && entry.conversationId !== conversationId
             ? { supersededConversationId: entry.conversationId } : {}),
-          ...(entry.lifetime ? { lifetime: entry.lifetime } : {}) });
+          ...(entry.lifetime ? { lifetime: entry.lifetime } : {}),
+          ...(entry.helperProject ? { helperProject: entry.helperProject } : {}) });
       } catch { /* blocked/deleted stays user-visible */ }
     }
     return result;
@@ -810,6 +812,7 @@ export async function requestBrowserDecision(text: string, signal: AbortSignal, 
   lifetime?: 'temporary-planner';
   sourceSessionId?: string; conversationId?: string | null; model?: string;
   reasoningEffort?: InputArgs['reasoningEffort'];
+  helperProject?: string;
   publish?: (text: string) => void;
 } = {}): Promise<string> {
   if (!text.trim() || text.length > MAX_CHATGPT_MESSAGE_CHARS) throw new Error('goal_context_too_large');
@@ -836,7 +839,9 @@ export async function requestBrowserDecision(text: string, signal: AbortSignal, 
       }
       const entry = entrySchema.parse({ id, sessionId: null, text, mode: 'after-turn', dueAt: Date.now(),
         model: options.model ?? 'gpt-5.6-sol', reasoningEffort: options.reasoningEffort ?? 'high',
-        decisionSourceSessionId: options.sourceSessionId, lifetime: options.lifetime, purpose: 'decision', state: 'queued', owner: null,
+        decisionSourceSessionId: options.sourceSessionId, lifetime: options.lifetime,
+        helperProject: options.lifetime === 'temporary-planner' ? undefined : options.helperProject?.trim() || undefined,
+        purpose: 'decision', state: 'queued', owner: null,
         createdAt: Date.now(), conversationId: options.conversationId ?? null });
       await commit(append(current, entry));
       return entry;

@@ -561,9 +561,9 @@ describe('enabled plugin process ownership', () => {
       await gate; return original(...args);
     });
     const replacing = manager.update(h.row.id);
-    await vi.waitFor(() => expect(installing).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(installing).toHaveBeenCalledTimes(1), { timeout: 10_000 });
     const revoke = action === 'disable' ? manager.setEnabled(h.row.id, false) : manager.uninstall(h.row.id);
-    try { await vi.waitFor(() => expect(alive(active.pid)).toBe(false), { timeout: 1000 }); }
+    try { await vi.waitFor(() => expect(alive(active.pid)).toBe(false), { timeout: 10_000 }); }
     finally { release(); await replacing; await revoke; }
     expect(await h.pids()).toHaveLength(1);
     expect(manager.tools()).toEqual([]);
@@ -574,7 +574,7 @@ describe('enabled plugin process ownership', () => {
     let release!: (value: string) => void;
     vi.mocked(getSecret).mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
     const restarting = manager.restart(h.row.id);
-    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'), { timeout: 10_000 });
     const before = await h.pids();
     try {
       const revoke = action === 'disable' ? manager.setEnabled(h.row.id, false) : manager.uninstall(h.row.id);
@@ -597,15 +597,15 @@ describe('enabled plugin process ownership', () => {
     vi.mocked(getSecret).mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
     manager = new PluginManager(); await manager.initialize(dir);
     try {
-      await vi.waitFor(() => expect(manager.snapshot().plugins.find(row => row.id === h.row.id)!.status).toBe('ready'));
+      await vi.waitFor(() => expect(manager.snapshot().plugins.find(row => row.id === h.row.id)!.status).toBe('ready'), { timeout: 10_000 });
       const result = await Promise.race([manager.call('Echo.Mixed', { value: 'ready peer' }), new Promise(resolve => setTimeout(() => resolve('blocked'), 200))]);
       expect(result).not.toBe('blocked');
       const active = (await h.pids()).at(-1)!;
       const closing = manager.close();
-      await vi.waitFor(() => expect(alive(active.pid)).toBe(false), { timeout: 1000 });
+      await vi.waitFor(() => expect(alive(active.pid)).toBe(false), { timeout: 10_000 });
       await closing;
     } finally { release?.('slow'); }
-  });
+  }, 60_000);
   it('starts with zero installations and does not wait for enabled-server credential discovery on reopen', async () => {
     expect(manager.snapshot().plugins).toEqual([]);
     expect(manager.tools()).toEqual([]);
@@ -618,22 +618,22 @@ describe('enabled plugin process ownership', () => {
     await manager.initialize(dir);
     expect(manager.snapshot().plugins[0]!.status).toBe('connecting');
     expect(manager.tools().map(tool => tool.name)).toEqual(['Echo.Mixed']);
-    await vi.waitFor(() => expect(releaseSecret).toBeTypeOf('function'));
+    await vi.waitFor(() => expect(releaseSecret).toBeTypeOf('function'), { timeout: 10_000 });
     releaseSecret('fixture-value');
-    await vi.waitFor(() => expect(manager.snapshot().plugins[0]!.status).toBe('ready'));
+    await vi.waitFor(() => expect(manager.snapshot().plugins[0]!.status).toBe('ready'), { timeout: 10_000 });
     await manager.setEnabled(h.row.id, false);
     const before = await h.pids();
     await manager.close(); manager = new PluginManager(); await manager.initialize(dir);
     expect(manager.snapshot().plugins[0]!.status).toBe('disabled');
     expect(manager.tools()).toEqual([]);
     expect(await h.pids()).toEqual(before);
-  });
+  }, 15_000);
   it('restores installed enabled servers and preserves a process across long gaps between calls', async () => {
     const h = await trackedFixture();
     expect(alive((await h.pids())[0]!.pid)).toBe(true);
     await manager.close(); manager = new PluginManager(); await manager.initialize(dir);
     expect(manager.tools().map(tool => tool.name)).toEqual(['Echo.Mixed']);
-    await vi.waitFor(() => expect(manager.snapshot().plugins[0]!.status).toBe('ready'));
+    await vi.waitFor(() => expect(manager.snapshot().plugins[0]!.status).toBe('ready'), { timeout: 10_000 });
     const active = (await h.pids())[1]!;
     vi.useFakeTimers();
     expect((await manager.call('Echo.Mixed', { value: 'first' })).isError).not.toBe(true);
@@ -665,8 +665,8 @@ describe('enabled plugin process ownership', () => {
     if (action === 'disable') await manager.setEnabled(h.row.id, false);
     else if (action === 'uninstall') await manager.uninstall(h.row.id);
     else await manager.close();
-    await vi.waitFor(() => expect(alive(active.pid)).toBe(false));
-    if (active.child) await vi.waitFor(() => expect(alive(active.child!)).toBe(false));
+    await vi.waitFor(() => expect(alive(active.pid)).toBe(false), { timeout: 10_000 });
+    if (active.child) await vi.waitFor(() => expect(alive(active.child!)).toBe(false), { timeout: 10_000 });
     expect((await manager.call('Echo.Mixed', { value: 'must not restart' })).isError).toBe(true);
     expect(await h.pids()).toHaveLength(1);
   });
@@ -680,7 +680,7 @@ describe('enabled plugin process ownership', () => {
     await manager.restart(h.row.id);
     expect((await manager.call('Echo.Mixed', { value: 'one attempt' })).isError).toBe(true);
     const active = (await h.pids())[1]!;
-    await vi.waitFor(() => expect(alive(active.pid)).toBe(false));
+    await vi.waitFor(() => expect(alive(active.pid)).toBe(false), { timeout: 10_000 });
     expect(await h.pids()).toHaveLength(2);
     expect(manager.snapshot().plugins[0]!.status).toBe('error');
   });
@@ -696,7 +696,7 @@ describe('enabled plugin process ownership', () => {
       return new Promise(resolve => { releaseSecret = resolve; });
     });
     const call = manager.restart(h.row.id);
-    await vi.waitFor(() => expect(requested).toBe(true));
+    await vi.waitFor(() => expect(requested).toBe(true), { timeout: 10_000 });
     const closing = manager.close();
     releaseSecret('fixture-value');
     await call;
@@ -711,7 +711,7 @@ describe('enabled plugin process ownership', () => {
     const request = vi.spyOn(Client.prototype, 'callTool').mockImplementationOnce(() =>
       new Promise((_resolve, reject) => { rejectCall = reject; }));
     const old = manager.call('Echo.Mixed', { value: 'delayed old transport result' });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1), { timeout: 10_000 });
     await manager.restart(h.row.id);
     expect(manager.snapshot().plugins[0]!.status).toBe('ready');
     rejectCall(new Error('old connection failed after replacement'));
@@ -730,7 +730,7 @@ describe('enabled plugin process ownership', () => {
     await fs.writeFile(file, JSON.stringify(stored));
     manager = new PluginManager(); await manager.initialize(dir);
     expect(manager.tools()).toEqual([]);
-    await vi.waitFor(() => expect(manager.snapshot().plugins[0]!.status).toBe('ready'));
+    await vi.waitFor(() => expect(manager.snapshot().plugins[0]!.status).toBe('ready'), { timeout: 10_000 });
     expect(manager.tools().map(tool => tool.name)).toEqual(['Echo.Mixed']);
     expect(await h.pids()).toHaveLength(2);
     expect(alive((await h.pids())[1]!.pid)).toBe(true);

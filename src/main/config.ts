@@ -147,10 +147,11 @@ const DEFAULT_GOAL: GoalSettings = {
   includeToolCalls: false,
   helperModel: 'gpt-5.6-sol',
   helperReasoning: 'high',
+  helperProject: '',
   enabled: false,
   // The mode a fresh install runs the moment somebody flips the switch. Goal, because it is
-  // the one that can end by itself: a loop that never stops is a deliberate choice, not a
-  // default anybody should discover by turning something on.
+  // the direct completion gate; Loop adds an iterative verification/repair closure pass and
+  // therefore remains a deliberate opt-in rather than a default anybody discovers by accident.
   mode: 'goal',
   // Default for the optional API backend only; ChatGPT does not read this block.
   provider: { kind: 'openrouter', baseUrl: '' },
@@ -371,6 +372,7 @@ const configSchema = z.object({
       loopBackend: z.enum(['api', 'chatgpt']).optional().default('chatgpt'),
       helperModel: z.string().trim().min(1).max(80).optional().default('gpt-5.6-sol').catch('gpt-5.6-sol'),
       helperReasoning: z.enum(REASONING_EFFORTS).optional().default('high').catch('high'),
+      helperProject: z.string().trim().max(160).optional().default('').catch(''),
       // Repaired rather than rejected for the same reason `reasoning` below is: a config
       // written by a version that knows one more mode than this one must not send every root
       // and permission in the file through conservative recovery over a single word.
@@ -424,9 +426,9 @@ const configSchema = z.object({
           prompt.trim() === '' ? DEFAULT_GOAL.objectivePrompt : prompt.trim()
         )
         .catch(DEFAULT_GOAL.objectivePrompt),
-      // The third editor, repaired exactly like the two above. Loop is the mode that cannot
-      // stop on its own, so an empty instruction here would be an unconstrained model typing
-      // into somebody's chat forever — the one shape this section must never load in.
+      // The third editor, repaired exactly like the two above. Loop may author several follow-up
+      // turns before its closure check converges, so an empty instruction here would remove the
+      // scope and stopping policy from the most iterative mode — never load that shape.
       loopPrompt: z
         .string()
         .max(MAX_GOAL_SYSTEM_PROMPT_CHARS)
@@ -436,7 +438,7 @@ const configSchema = z.object({
         .catch(DEFAULT_GOAL.loopPrompt)
     })
     .optional()
-    .default({ ...DEFAULT_GOAL, backend: 'chatgpt', loopBackend: 'chatgpt', impulseMinutes: 0, includeToolCalls: false, helperModel: 'gpt-5.6-sol', helperReasoning: 'high' }),
+    .default({ ...DEFAULT_GOAL, backend: 'chatgpt', loopBackend: 'chatgpt', impulseMinutes: 0, includeToolCalls: false, helperModel: 'gpt-5.6-sol', helperReasoning: 'high', helperProject: '' }),
   mcp: z
     .object({
       // Repaired rather than rejected, like the Goal prompts above: this is free text a person

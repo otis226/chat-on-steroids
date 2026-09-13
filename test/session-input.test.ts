@@ -369,8 +369,9 @@ describe('durable user input ownership', () => {
     const controller = new AbortController();
     const wake = vi.fn(async () => undefined);
     configureInputDelivery({ applyAutomation: automate, changed, wakeDecision: wake });
-    const answer = requestBrowserDecision('PRIVATE PLANNER TASK', controller.signal, { lifetime: 'temporary-planner' });
+    const answer = requestBrowserDecision('PRIVATE PLANNER TASK', controller.signal, { lifetime: 'temporary-planner', helperProject: 'Chat Core Temp' });
     await vi.waitFor(async () => expect(await pendingBrowserInputs()).toHaveLength(1));
+    expect((await pendingBrowserInputs())[0]).not.toHaveProperty('helperProject');
     const row = (await listInputs())[0]!;
     await vi.waitFor(() => expect(wake).toHaveBeenCalledWith(expect.objectContaining({ id: row.id, lifetime: 'temporary-planner', conversationId: null }), controller.signal));
     expect(await claimBrowserInput(row.id, 'temporary-page', null)).toMatchObject({ text: 'PRIVATE PLANNER TASK', lifetime: 'temporary-planner' });
@@ -806,11 +807,11 @@ describe('browser decision lifetime', () => {
     binding.activeTurnId = 'source-still-running';
     const controller = new AbortController();
     const answer = requestBrowserDecision('New source response', controller.signal, {
-      sourceSessionId: sessionId, conversationId: 'helper-conversation', model: 'gpt-5.6-sol', reasoningEffort: 'high'
+      sourceSessionId: sessionId, conversationId: 'helper-conversation', model: 'gpt-5.6-sol', reasoningEffort: 'high', helperProject: 'Chat Core Temp'
     });
     const row = (await listInputs())[0]!;
-    expect(row).toMatchObject({ sessionId: null, decisionSourceSessionId: sessionId, model: 'gpt-5.6-sol', reasoningEffort: 'high' });
-    expect(await pendingBrowserInputs()).toEqual([{ id: row.id, conversationId: 'helper-conversation' }]);
+    expect(row).toMatchObject({ sessionId: null, decisionSourceSessionId: sessionId, model: 'gpt-5.6-sol', reasoningEffort: 'high', helperProject: 'Chat Core Temp' });
+    expect(await pendingBrowserInputs()).toEqual([{ id: row.id, conversationId: 'helper-conversation', helperProject: 'Chat Core Temp' }]);
     expect(await claimBrowserInput(row.id, 'wrong', binding.conversationId)).toBeNull();
     expect(await claimBrowserInput(row.id, 'helper', 'helper-conversation')).not.toBeNull();
     expect(await completeBrowserDecision(row.id, 'helper', 'reply', binding.conversationId)).toBe(false);

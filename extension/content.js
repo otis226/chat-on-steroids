@@ -6099,7 +6099,7 @@
               ? 'Goal and Loop off'
               : position === 'loop'
                 ? hasKey
-                  ? 'Loop on — never stops on its own'
+                  ? 'Loop on — verifies and repairs until this job converges'
                   : 'Loop on — no API key'
                 : hasKey
                   ? objective
@@ -10147,6 +10147,9 @@
     if (desktopInputBusy || modelCatalogBusy || !alive || (generating && !message.directTurn) || pendingTools > 0 || goalBusy || job?.busy) return false;
     const target = message.conversationId || null;
     const forEpoch = epoch;
+    const helperProject = !target && message.lifetime !== 'temporary-planner' && typeof message.helperProject === 'string'
+      ? message.helperProject.trim().replace(/\s+/g, ' ').slice(0, 160) : '';
+    let helperProjectId = null;
     const sourceTurn = turnId;
     const sourceUser = CLF_DOM.messages().filter(row => row.role === 'user').at(-1)?.id;
     let sendAttempted = false;
@@ -10156,14 +10159,31 @@
     if (!onTarget()) return false;
     if (message.directTurn && (!target || ((generating || CLF_DOM.generating()) &&
         (!sourceUser || sourceTurn !== message.directTurn.id)))) return false;
-    const ownsFreshPage = () => !target && onTarget() && location.pathname === '/' &&
-      new URL(location.href).searchParams.get('cos-input') === message.id && !CLF_DOM.turns().length;
-    if (!target && !ownsFreshPage()) return false;
+    const ownsMarker = () => {
+      const url = new URL(location.href);
+      return url.searchParams.get('cos-input') === message.id || new URLSearchParams(url.hash.slice(1)).get('cos-input') === message.id;
+    };
+    const ownsFreshRoot = () => !target && onTarget() && location.pathname === '/' && ownsMarker() && !CLF_DOM.turns().length;
+    const ownsFreshPage = () => !target && onTarget() && ownsMarker() && !CLF_DOM.turns().length &&
+      (helperProject ? !!helperProjectId && CLF_DOM.projectHomeId() === helperProjectId : location.pathname === '/');
+    if (!target && !ownsFreshRoot()) return false;
     desktopInputBusy = true;
     let decision = null;
     let sent = false;
     let draft = null;
     try {
+      if (helperProject) {
+        helperProjectId = await CLF_DOM.enterProjectByName(helperProject, () =>
+          alive && epoch === forEpoch && CLF_DOM.conversationId() === null && !CLF_DOM.turns().length);
+        if (!helperProjectId || !onTarget() || CLF_DOM.projectHomeId() !== helperProjectId || CLF_DOM.turns().length) return false;
+        // The SPA Project transition may discard the app's query/hash marker. Restore it on
+        // this same exact document so the service worker keeps recognizing its elected input.
+        const marked = new URL(location.href);
+        marked.searchParams.set('cos-input', message.id);
+        marked.hash = 'cos-input=' + encodeURIComponent(message.id);
+        history.replaceState(history.state, '', marked);
+        if (!ownsFreshPage()) return false;
+      }
       // Registration may precede React mounting the composer. Observe that same document
       // instead of rejecting the offer and waiting for Chrome's next 30-second alarm.
       // A canonical final can also precede Stop -> Send by a normal render frame.

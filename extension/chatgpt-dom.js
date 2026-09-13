@@ -2179,6 +2179,107 @@ var CLF_DOM = (() => {
     });
   }
 
+  /**
+   * Put a fresh app-owned helper into one exact native ChatGPT Project.
+   *
+   * Helper creation starts on New Chat, so unlike Compact & Resume it has no source-chat
+   * Project link to follow. Use ChatGPT's own sidebar link instead of cold-loading /project:
+   * cold Project routes can hit the provider's locked-chat loader before the Project shell is
+   * ready. The exact visible name is only a selector; once chosen, the route's immutable
+   * g-p-* id is the authority for the rest of the transition.
+   */
+  async function enterProjectByName(name, stillCurrent = () => true) {
+    const wanted = typeof name === 'string' ? name.trim().replace(/\s+/g, ' ') : '';
+    if (!wanted || wanted.length > 160 || conversationId() || projectHomeId()) return null;
+    const shown = node => node && !node.closest(OWN_SURFACES) && !node.closest('[hidden],[aria-hidden="true"],[inert]') && node.getClientRects().length > 0;
+    const clean = value => typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
+    const label = link => [link.getAttribute('aria-label'), link.getAttribute('title'), link.textContent]
+      .filter(value => typeof value === 'string').map(clean);
+    // ChatGPT has shipped both link-backed Project rows and button-backed rows. The latter
+    // expose the Project name as row text plus one native "Open project home" action, with no
+    // href to inspect before clicking. Pair the exact visible name with that action instead of
+    // guessing from row order; the immutable g-p-* route becomes authoritative immediately
+    // after the one native click.
+    const buttonChoices = () => {
+      const choices = new Set();
+      for (const named of [...document.querySelectorAll('*')]) {
+        if (!shown(named) || clean(named.textContent) !== wanted) continue;
+        let row = named;
+        for (let depth = 0; row && depth < 6; depth++, row = row.parentElement) {
+          const buttons = [...row.querySelectorAll('button,[role="button"]')].filter(shown);
+          const homes = buttons.filter(button => {
+            const labels = [button.getAttribute('aria-label'), button.getAttribute('title'), button.textContent].map(clean);
+            return labels.some(value => value.toLowerCase() === 'open project home');
+          });
+          if (homes.length === 1) { choices.add(homes[0]); break; }
+          if (homes.length > 1) break;
+        }
+      }
+      return [...choices];
+    };
+    return new Promise(resolve => {
+      let clicked = false, done = false, sourceComposer = null, targetId = null, sidebarOpened = false;
+      const interrupt = event => { if (event.isTrusted) finish(null); };
+      const finish = result => {
+        if (done) return;
+        done = true; observer.disconnect(); clearTimeout(timer);
+        document.removeEventListener('pointerdown', interrupt, true);
+        document.removeEventListener('keydown', interrupt, true);
+        resolve(result);
+      };
+      const check = () => {
+        if (done) return;
+        if (!stillCurrent()) return finish(null);
+        if (clicked) {
+          if (!targetId && projectHomeId()) targetId = projectHomeId();
+          if (targetId && projectHomeId() === targetId && composer()?.isConnected && composer() !== sourceComposer && !turns().length) return finish(targetId);
+          if (conversationId() || (projectHomeId() && projectHomeId() !== targetId)) finish(null);
+          return;
+        }
+        if (conversationId() || projectHomeId()) return finish(null);
+        const source = composer();
+        if (!source?.isConnected || !composerSubmitReady() || hasComposerAttachments() || turns().length) return;
+        const byId = new Map();
+        for (const link of [...document.querySelectorAll('a[href]')]) {
+          if (!shown(link) || !label(link).includes(wanted)) continue;
+          let id = null;
+          try {
+            const url = new URL(link.href, location.href);
+            if (url.origin === location.origin) id = projectHomeId(url.pathname);
+          } catch { /* malformed provider link */ }
+          if (id && !byId.has(id)) byId.set(id, link);
+        }
+        if (byId.size > 1) return finish(null);
+        const choice = byId.entries().next().value;
+        if (choice) {
+          [targetId] = choice; const link = choice[1];
+          sourceComposer = source; clicked = true;
+          clearTimeout(timer); timer = setTimeout(() => finish(null), 12_000);
+          link.click(); check(); return;
+        }
+        const buttons = buttonChoices();
+        if (buttons.length > 1) return finish(null);
+        if (buttons.length === 1) {
+          sourceComposer = source; clicked = true;
+          clearTimeout(timer); timer = setTimeout(() => finish(null), 12_000);
+          buttons[0].click(); check(); return;
+        }
+        if (sidebarOpened) return;
+        const toggles = [...document.querySelectorAll('button[data-testid="open-sidebar-button"][aria-expanded="false"][aria-controls]')].filter(shown);
+        if (toggles.length === 1 && !toggles[0].disabled) {
+          sidebarOpened = true;
+          toggles[0].click();
+        }
+      };
+      const observer = new MutationObserver(check);
+      observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true });
+      let timer = setTimeout(() => finish(null), 12_000);
+      document.addEventListener('pointerdown', interrupt, true);
+      document.addEventListener('keydown', interrupt, true);
+      check();
+    });
+  }
+
   async function newChatControl(stillCurrent = () => true) {
     const shown = node => node && !node.closest(OWN_SURFACES) && !node.closest('[hidden],[aria-hidden="true"],[inert]') && node.getClientRects().length > 0;
     const link = (root = document) => [...root.querySelectorAll('a[data-testid="create-new-chat-button"][data-sidebar-item="true"][href="/"]')].find(shown) || null;
@@ -2211,6 +2312,7 @@ var CLF_DOM = (() => {
     newChatControl,
     projectHomeId,
     enterProject,
+    enterProjectByName,
     visibleModelSelection,
     inspectModelSettings,
     uploadImages,

@@ -197,7 +197,11 @@ describe('runCommand', () => {
     const result = await launchCommand(shell!, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], cwd);
     expect(result.pid).toBeGreaterThan(0);
 
-    const deadline = Date.now() + 3000;
+    // This test proves that launchCommand really dispatches the detached payload, not that a
+    // contended Windows host schedules a fresh PowerShell process within three seconds.
+    // Keep the wait bounded, but leave enough headroom for the same payload to start while the
+    // wider process-heavy suite is running in parallel.
+    const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
       const text = await fs.readFile(marker, 'utf8').catch(() => '');
       if (text === 'launched') return;

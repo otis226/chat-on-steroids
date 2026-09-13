@@ -148,7 +148,7 @@ describe('Goal decision backends', () => {
   });
   it('reuses its durable helper with only proven incremental source messages after restart', async () => {
     const config = defaultConfig();
-    await saveConfig({ ...config, goal: { ...config.goal, enabled: true, backend: 'chatgpt' } });
+    await saveConfig({ ...config, goal: { ...config.goal, enabled: true, backend: 'chatgpt', helperProject: 'Chat Core Temp' } });
     const id = 'incremental-source';
     const sessionId = await recording(id, 'Original reference only');
     browser.request.mockImplementation(async (_text, _signal, options) => {
@@ -157,7 +157,7 @@ describe('Goal decision backends', () => {
     });
     goal.startGoalDraft({ conversationId: id, sessionId, turnId: 'first' });
     expect((await settled(id)).stage).toBe('ready');
-    expect(browser.request.mock.calls[0]?.[2]).toEqual({ sourceSessionId: sessionId, conversationId: null, model: 'gpt-5.6-sol', reasoningEffort: 'high', publish: expect.any(Function) });
+    expect(browser.request.mock.calls[0]?.[2]).toEqual({ sourceSessionId: sessionId, conversationId: null, helperProject: 'Chat Core Temp', model: 'gpt-5.6-sol', reasoningEffort: 'high', publish: expect.any(Function) });
     expect(browser.request.mock.calls[0]?.[0]).toContain('Original reference only');
     const saved = goal.snapshotGoalSwitches();
     goal.resetGoalStateForTests();
@@ -221,14 +221,15 @@ describe('Goal decision backends', () => {
     expect(await goal.draftFastFollowup(sessionId)).toBe('Continue the next useful step');
     expect(browser.request).toHaveBeenCalledTimes(1); expect(fetch).not.toHaveBeenCalled();
   });
-  it('retains the exact objective in the Loop instruction and refuses a stopping finish answer', async () => {
+  it('retains the exact objective and lets a converged Loop finish stop once', async () => {
     await saveConfig({ ...defaultConfig(), goal: { ...defaultConfig().goal, loopBackend: 'chatgpt', loopPrompt: 'Continue the loop request.' } });
     const conversationId = 'finish-loop-objective';
     const sessionId = await recording(conversationId, 'Previous result');
     await goal.setGoalObjectiveNow(conversationId, 'Finish my exact objective');
     browser.request.mockResolvedValue('{"action":"stop","reply":""}');
-    await expect(goal.draftFastFollowup(sessionId)).rejects.toThrow('loop_stop_refused');
-    expect(browser.request).toHaveBeenCalledTimes(3);
+
+    expect(await goal.draftFastFollowup(sessionId)).toBeNull();
+    expect(browser.request).toHaveBeenCalledTimes(1);
     expect(browser.request.mock.calls[0]?.[0]).toContain('Continue the loop request.');
     expect(browser.request.mock.calls[0]?.[0]).toContain('Finish my exact objective');
   });

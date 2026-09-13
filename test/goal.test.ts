@@ -176,16 +176,17 @@ describe('the instruction the goal model is given', () => {
    * to say which one wins, and each has to license a message long enough to actually carry the
    * requirement rather than compressing it back down to "keep going".
    */
-  it('makes the saved goal the requirements and lets the message be long enough to carry them', () => {
-    for (const prompt of [goal.goalObjectivePrompt(), goal.goalLoopPrompt()]) {
-      expect(prompt).toContain('Read the whole goal again before every message you write');
-      expect(prompt).toContain('account of the job is not the job');
-      expect(prompt).toContain('Say what you want in full');
-      expect(prompt).toContain('Length is not a problem here');
-    }
-    // Which of the two wins is stated in each one's own vocabulary.
-    expect(goal.goalObjectivePrompt()).toContain('the goal wins');
-    expect(goal.goalLoopPrompt()).toContain('the requirements win');
+  it('makes the saved goal authoritative in both Goal and Loop modes', () => {
+    const objective = goal.goalObjectivePrompt();
+    expect(objective).toContain('Read the whole goal again before every message you write');
+    expect(objective).toContain('account of the job is not the job');
+    expect(objective).toContain('the goal wins');
+
+    const loop = goal.goalLoopPrompt();
+    expect(loop).toContain('Re-read the whole original request every pass');
+    expect(loop).toContain("ChatGPT's summaries, plans and claims of completion are evidence, not requirements");
+    expect(loop).toContain('Never invent a new feature');
+    expect(loop).toContain('Work toward convergence, not endless activity');
   });
 
   /**
@@ -2146,13 +2147,10 @@ describe('opening a chat on a goal', () => {
     await goal.draftOpeningMessage('build the voxel sandbox', 'loop');
 
     const messages = sent['messages'] as Array<{ role: string; content: string }>;
-    expect(messages[0]!.content).toContain('You have exactly one move');
-    // The schema goes with the instruction: in loop mode the enum has no way to spell a stop,
-    // so the mode is enforced at the wire as well as asked for in words.
-    expect(JSON.stringify(sent['response_format'])).toContain('always continue');
-    // And the closing reminder is the loop's, which is where a model that only read the last
-    // thing it was shown is told that stopping is not one of its moves.
-    expect(messages.at(-1)!.content).toContain('stopping, silence and NO_REPLY do not exist here');
+    expect(messages[0]!.content).toContain('Work toward convergence, not endless activity');
+    expect(JSON.stringify(sent['response_format'])).toContain('"stop"');
+    expect(JSON.stringify(sent['response_format'])).toContain('"continue"');
+    expect(messages.at(-1)!.content).toContain('closure audit already passed');
   });
 });
 /**
@@ -2168,7 +2166,7 @@ describe('opening a chat on a goal', () => {
  *   · A model that will not write is a failure the page can retry, never a sentence this app
  *     wrote and attributed to it.
  */
-describe('the loop that never stops', () => {
+describe('the converging loop', () => {
   const loopMode = async (): Promise<void> => {
     await saveConfig({
       ...defaultConfig(),
@@ -2203,14 +2201,12 @@ describe('the loop that never stops', () => {
    * The instruction is the feature. A loop told it has two moves is a gate with extra words,
    * and the whole point of this mode is that the second move does not exist.
    */
-  it('is written with one move and no stop sentinel of its own', () => {
+  it('states a bounded convergence rule instead of an endless-speaking rule', () => {
     const prompt = goal.goalLoopPrompt();
-    expect(prompt).toContain('Your job is to prompt ChatGPT');
-    expect(prompt).toContain('You have exactly one move');
-    expect(prompt).toContain('you never answer NO_REPLY');
-    // The two failure modes a must-always-speak model actually has, both named.
-    expect(prompt).toContain('Come back to the whole thing often');
-    expect(prompt).toContain('"Looks done" is a reason to raise the bar, never a reason to stop');
+    expect(prompt).toContain('Work toward convergence, not endless activity');
+    expect(prompt).toContain('Use a bounded closure pass');
+    expect(prompt).toContain('Stop once the work has converged');
+    expect(prompt).toContain('Do not ask for another review');
   });
 
   /**
@@ -2219,20 +2215,20 @@ describe('the loop that never stops', () => {
    * one way it can wander off the job entirely, so the direction is pinned: deeper into the
    * same requirements, never sideways into a second project.
    */
-  it('escalates by going deeper into the same requirements, not by finding a new job', () => {
+  it('goes deeper only to verify or repair the same requested job', () => {
     const prompt = goal.goalLoopPrompt();
-    expect(prompt).toContain('Every pass raises the bar on the same requirements');
-    expect(prompt).toContain('Asking for more is not the same as asking for something else');
-    expect(prompt).toContain('Iterate the process; never change the subject');
+    expect(prompt).toContain('Do not drift');
+    expect(prompt).toContain('Going deeper is allowed only when it directly verifies or repairs');
+    expect(prompt).toContain('Never invent a new feature');
   });
 
-  it('sends the loop instruction, its own trailer, and a schema with no stop in it', async () => {
+  it('sends the loop instruction, convergence trailer, and a schema that can stop', async () => {
     await loopMode();
     const sessionId = await seed('c-loop-1');
     let body: any = null;
     globalThis.fetch = (async (_url: string, init: RequestInit) => {
       body = JSON.parse(String(init.body));
-      return decision('continue', 'go over the whole thing again and tell me what changed');
+      return decision('continue', 'run the missing end-to-end verification');
     }) as never;
 
     goal.startGoalDraft({ sessionId, conversationId: 'c-loop-1', turnId: 'g-loop-1' });
@@ -2243,13 +2239,9 @@ describe('the loop that never stops', () => {
       .filter((message: { role: string }) => message.role === 'system')
       .map((message: { content: string }) => message.content);
     expect(system[0]).toBe(goal.goalLoopPrompt());
-    // Neither of the other two instructions comes along: one would tell the model it may stop
-    // while the other tells it it may not.
-    expect(system.join('\n')).not.toContain('You have exactly two moves');
-    expect(system[1]).toContain('Action is always "continue"');
-    expect(body.messages.at(-1).content).toContain('stopping, silence and NO_REPLY do not exist here');
-    // The app's half of the same promise, made where a model cannot argue with it.
-    expect(body.response_format.json_schema.schema.properties.action.enum).toEqual(['continue']);
+    expect(system[1]).toContain('closure review is still needed');
+    expect(body.messages.at(-1).content).toContain('closure audit already passed');
+    expect(body.response_format.json_schema.schema.properties.action.enum).toEqual(['stop', 'continue']);
   });
 
   it('keeps a chat’s own goal in front of the loop', async () => {
@@ -2306,49 +2298,40 @@ describe('the loop that never stops', () => {
    * wrote the sentinel into the message text. That is a malformed answer, and the repair is
    * to ask again with the refusal spelled out — never to invent the message ourselves.
    */
-  it('asks again when the loop tries to stop, and uses the message it writes next', async () => {
+  it('accepts convergence in one request instead of retrying a stop', async () => {
     await loopMode();
-    const sessionId = await seed('c-loop-retry');
-    const bodies: any[] = [];
-    globalThis.fetch = (async (_url: string, init: RequestInit) => {
-      bodies.push(JSON.parse(String(init.body)));
-      return bodies.length === 1 ? decision('continue', 'NO_REPLY') : decision('continue', 'keep going, the export is missing');
+    const sessionId = await seed('c-loop-stop');
+    let asked = 0;
+    globalThis.fetch = (async () => {
+      asked += 1;
+      return decision('stop');
     }) as never;
 
-    goal.startGoalDraft({ sessionId, conversationId: 'c-loop-retry', turnId: 'g-loop-retry' });
-    const view = await settled('c-loop-retry');
+    goal.startGoalDraft({ sessionId, conversationId: 'c-loop-stop', turnId: 'g-loop-stop' });
+    const view = await settled('c-loop-stop');
 
-    expect(view.stage).toBe('ready');
-    expect(view.reply).toBe(goal.humanReply('keep going, the export is missing'));
-    expect(bodies).toHaveLength(2);
-    // The second attempt is the first one plus the refusal, so the model is told exactly what
-    // was wrong with the answer it just gave.
-    const second = bodies[1].messages
-      .filter((message: { role: string }) => message.role === 'system')
-      .map((message: { content: string }) => message.content);
-    expect(second.join('\n')).toContain('Your previous answer tried to end the conversation');
+    expect(asked).toBe(1);
+    expect(view.stage).toBe('no-reply');
+    expect(view.error).toBeNull();
+    expect(view.reply).toBe('');
   });
 
-  it('gives up retryably rather than typing a sentence the model never wrote', async () => {
+  it('treats a legacy NO_REPLY sentinel as convergence without spending another request', async () => {
     await loopMode();
-    const sessionId = await seed('c-loop-refused');
+    const sessionId = await seed('c-loop-legacy-stop');
     let asked = 0;
     globalThis.fetch = (async () => {
       asked += 1;
       return decision('continue', 'NO_REPLY');
     }) as never;
 
-    goal.startGoalDraft({ sessionId, conversationId: 'c-loop-refused', turnId: 'g-loop-refused' });
-    const view = await settled('c-loop-refused');
+    goal.startGoalDraft({ sessionId, conversationId: 'c-loop-legacy-stop', turnId: 'g-loop-legacy-stop' });
+    const view = await settled('c-loop-legacy-stop');
 
-    // Bounded: a chat that will not answer must not spend the key in a circle.
-    expect(asked).toBe(3);
-    expect(view.stage).toBe('failed');
-    expect(view.error).toBe('loop_stop_refused');
+    expect(asked).toBe(1);
+    expect(view.stage).toBe('no-reply');
+    expect(view.error).toBeNull();
     expect(view.reply).toBe('');
-    // The turn is still owed an answer, so the page may ask again on its own clock. This is
-    // the one thing that keeps the promise honest across a model having a bad minute.
-    expect(view.retryable).toBe(true);
   });
 
   it('writes the opening message of a new chat under the loop instruction too', async () => {

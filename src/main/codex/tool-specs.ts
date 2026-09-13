@@ -36,7 +36,7 @@ export const WINDOWS_SHELL_GUIDANCE = `Windows safety rules:
  * per attempt is not.
  */
 export const BROWSER_LAUNCH_GUIDANCE =
-  'Browsers: do not spawn a new browser, profile or debug port per attempt — each stays resident and heats the CPU. Keep to one or two windows you actually use and reuse the one already open.';
+  'Browsers: reuse one or two windows. Do not spawn a browser, profile or debug port per attempt; each stays resident and heats CPU.';
 
 export const EXEC_COMMAND_DESCRIPTION = IS_WINDOWS
   ? `Runs a command in a PTY, returning output or a session ID for ongoing interaction. Completed background output follows automatically on this chat's later tool responses. Use write_stdin with the returned ID for input, progress or an intentional wait while it runs.\n\n${WINDOWS_SHELL_GUIDANCE}\n\n${BROWSER_LAUNCH_GUIDANCE}`

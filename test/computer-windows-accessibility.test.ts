@@ -197,7 +197,10 @@ try {
       expect(result.status, result.stderr + result.stdout).toBe(0);
       expect(result.stdout).toContain('WINDOWS_ACCESSIBILITY_PROBE_OK');
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      // Windows can keep the just-exited WPF executable mapped briefly after
+      // WaitForExit/Dispose. Retry only the test fixture cleanup instead of turning
+      // that transient image-section lock into a product failure under CI load.
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   }, 40_000);
 });

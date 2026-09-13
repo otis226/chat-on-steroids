@@ -55,8 +55,9 @@ losing the project, history, workers or queued instructions when a chat grows to
    path. The queue remains editable until its exact entry has been claimed.
 5. **Plan or automate deliberately.** A generated workflow gives the executor the whole job
    immediately and queues later verification checkpoints. Goal continues unfinished requested
-   work and may stop. Loop keeps asking for deeper work within the same brief until switched
-   off. Astra uses its finish-tool boundary for automatic continuation.
+   work and stops at its finish line. Loop iterates the same brief through verification, repair
+   and one bounded closure pass, then stops when that job converges. Astra uses its finish-tool
+   boundary for automatic continuation.
 6. **Continue across time.** Workers sleep for reuse. Compact & Resume moves the same local
    session from old ChatGPT chat A to new chat B. History remains readable; queued work and
    project identity remain attached to the session. Recovery helps only work the app can still
@@ -73,7 +74,7 @@ losing the project, history, workers or queued instructions when a chat grows to
 | Local project | Explicit folder association and sidebar grouping; grants no new permission. |
 | Native ChatGPT project | Provider `/g/.../c/...` context; separate from the app's local folder catalog. |
 | Goal objective | The requested finish line for one chat. It persists independently of a provider attempt. |
-| Goal / Loop | Mutually exclusive modes of one driver. Goal can decide no further message is needed; Loop continues within scope. |
+| Goal / Loop | Mutually exclusive modes of one driver. Goal stops at the requested finish line; Loop may iterate through verification/repair before stopping after bounded convergence. |
 | Generated workflow / checkpoints | User instructions owned by the outbox; delivered at real finish/completion boundaries. |
 | `update_plan` | The agent's displayed progress plan. It does not execute or consume queue entries. |
 | `session_finish` | Astra's explicit near-finish hold/notice boundary; does not mean the whole task is already verified. |
@@ -1186,8 +1187,9 @@ in §19. Do not infer permission to launch development subagents from a product 
 
 **Intent:** preserve the original user task and accepted corrections, notice a legitimate
 completion boundary, and decide whether another useful instruction is owed. Goal can stop
-when its finish line is met. Loop continues improving/checking within that task until Off;
-it must not invent an unrelated project just to keep generating.
+when its finish line is met. Loop drives the same task through implementation, verification,
+repair and one bounded closure audit, then stops once that work has converged. It must not
+invent an unrelated project or endless polish just to keep generating.
 
 `goal.ts` owns objectives, chat switches, reply obligations, helper roles and decision attempts.
 `shared/goal.ts` owns bounded prompt/contracts; `goal.ts` projects applicability and the outbox
@@ -1228,6 +1230,12 @@ the old delayed retry, and a settled refusal waits for a new authorized episode.
 | Goal templates | Offline explicit terminal-marker policy; only Goal supports this backend. Missing/ambiguous expected markers pause rather than infer completion from prose. |
 | Temporary planner | Captures a new workflow for the user, then retires with exact idle/draft proof; distinct from the persistent decision helper. |
 
+When `goal.helperProject` names a native ChatGPT Project, a fresh persistent decision helper
+enters that exact visible Project through ChatGPT's own sidebar link before its first send. The
+name only selects the link; the resulting `g-p-*` route id owns the transition. Missing or
+ambiguous matching Projects fail closed. Temporary planners remain Temporary Chats and do not
+use this grouping setting.
+
 Goal gate, objective and Loop prompts are separately configurable. Default helper selection is
 Sol/high in the checked config, but live account metadata governs whether it can be used.
 API model discovery is bounded and cached by endpoint/key; a list entry does not prove an
@@ -1244,8 +1252,9 @@ another helper automatically. Clear temporary-planner answer content before dura
 publication; it is not a normal recorded executor task.
 
 Provider progress updates one existing timeline row and is never sendable text. Validate the
-final bounded decision schema before publication. Goal may return stop/no reply. Loop requires
-a continuation and has a bounded three-retry invalid-stop policy. API SSE is used when publishing
+final bounded decision schema before publication. Goal may return stop/no reply. Loop may also
+return stop only after the same requested job has converged through its bounded closure policy,
+or when the only remaining blocker requires the real user. API SSE is used when publishing
 progress; legacy plain streaming is compatibility handling, not another driver authority.
 Cancellation/timeout must release only that exact attempt and leave an honest error/retry state.
 

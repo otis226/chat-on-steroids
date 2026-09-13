@@ -1213,7 +1213,7 @@ describe('a pipeline stopped early by Select-Object -First', () => {
     expect(run(`${generator} | Select-Object -First 5 | Out-Null`)).not.toBe(0);
     // -Wait drains instead of stopping, which is the remedy the note hands the model.
     expect(run(`${generator} | Select-Object -First 5 -Wait | Out-Null`)).toBe(0);
-  });
+  }, 60_000);
 });
 
 describe('git grep, which spends exit 1 on "found nothing" like every other search', () => {

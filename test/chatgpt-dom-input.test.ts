@@ -6,6 +6,7 @@ const source = readFileSync(new URL('../extension/chatgpt-dom.js', import.meta.u
 interface DomApi {
   insertPrompt(text: string, mode?: boolean | 'append', failure?: (reason: string) => void): boolean;
   enterProject(entry: { id: string; sourceConversationId: string }, current?: () => boolean): Promise<boolean>;
+  enterProjectByName(name: string, current?: () => boolean): Promise<string | null>;
   composerActions(): { host: HTMLElement; before: HTMLElement | null } | null;
   generating(): boolean;
   sendButton(): HTMLButtonElement | null;
@@ -210,6 +211,100 @@ describe('native Project entry readiness', () => {
     expect(await entered).toBe(false);
     expect(clicks).not.toHaveBeenCalled();
     if (reason === 'draft') expect(box.textContent).toBe('Keep my draft');
+  });
+});
+
+describe('native helper Project entry', () => {
+  const firstId = 'g-p-11111111222233334444555555555555';
+  const secondId = 'g-p-aaaaaaaa222233334444555555555555';
+  const firstUrl = 'https://chatgpt.com/g/' + firstId + '-chat-core-temp/project';
+
+  function projectLink(id = firstId, name = 'Chat Core Temp') {
+    const link = document.createElement('a');
+    link.href = 'https://chatgpt.com/g/' + id + '-helper/project';
+    link.textContent = name;
+    document.body.prepend(link);
+    return link;
+  }
+
+  it('enters one exact visible Project by name and proves its immutable route id', async () => {
+    box.textContent = '';
+    const link = projectLink();
+    const clicks = vi.fn();
+    link.addEventListener('click', event => {
+      event.preventDefault(); clicks();
+      dom.reconfigure({ url: firstUrl });
+      box.replaceWith(box.cloneNode(true));
+    });
+
+    expect(await api.enterProjectByName('  Chat   Core Temp  ')).toBe(firstId);
+    expect(clicks).toHaveBeenCalledOnce();
+  });
+
+  it('reveals the native sidebar before choosing the exact helper Project', async () => {
+    box.textContent = '';
+    const sidebar = document.createElement('nav'); sidebar.id = 'sidebar';
+    const toggle = document.createElement('button');
+    toggle.dataset.testid = 'open-sidebar-button';
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.setAttribute('aria-controls', sidebar.id);
+    document.body.prepend(toggle, sidebar);
+    const clicks = vi.fn();
+    toggle.addEventListener('click', () => {
+      toggle.setAttribute('aria-expanded', 'true');
+      const link = document.createElement('a');
+      link.href = firstUrl; link.textContent = 'Chat Core Temp';
+      link.addEventListener('click', event => {
+        event.preventDefault(); clicks();
+        dom.reconfigure({ url: firstUrl });
+        box.replaceWith(box.cloneNode(true));
+      });
+      sidebar.append(link);
+    });
+
+    expect(await api.enterProjectByName('Chat Core Temp')).toBe(firstId);
+    expect(clicks).toHaveBeenCalledOnce();
+  });
+
+  it('enters the current button-backed native Project row and learns its immutable route id after click', async () => {
+    box.textContent = '';
+    const row = document.createElement('li');
+    const name = document.createElement('span'); name.textContent = 'Chat Core Temp';
+    const open = document.createElement('button'); open.setAttribute('aria-label', 'Open project home');
+    row.append(name, open); document.body.prepend(row);
+    const clicks = vi.fn();
+    open.addEventListener('click', () => {
+      clicks();
+      dom.reconfigure({ url: firstUrl });
+      box.replaceWith(box.cloneNode(true));
+    });
+
+    expect(await api.enterProjectByName('Chat Core Temp')).toBe(firstId);
+    expect(clicks).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed when exact button-backed Project rows are ambiguous', async () => {
+    box.textContent = '';
+    const clicks = vi.fn();
+    for (let index = 0; index < 2; index++) {
+      const row = document.createElement('li');
+      const name = document.createElement('span'); name.textContent = 'Chat Core Temp';
+      const open = document.createElement('button'); open.setAttribute('aria-label', 'Open project home');
+      open.addEventListener('click', clicks); row.append(name, open); document.body.prepend(row);
+    }
+    expect(await api.enterProjectByName('Chat Core Temp')).toBeNull();
+    expect(clicks).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the same Project name resolves to more than one id', async () => {
+    box.textContent = '';
+    const first = projectLink(firstId);
+    const second = projectLink(secondId);
+    const click = vi.fn((event: Event) => event.preventDefault());
+    first.addEventListener('click', click); second.addEventListener('click', click);
+
+    expect(await api.enterProjectByName('Chat Core Temp')).toBeNull();
+    expect(click).not.toHaveBeenCalled();
   });
 });
 

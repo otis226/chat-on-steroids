@@ -263,7 +263,12 @@ describe('Codex unified exec runtime parity', () => {
       shellType: process.platform === 'win32' ? 'powershell' : 'bash',
       hookCommand: 'pipe exit-code parity child',
       processId,
-      yieldTimeMs: 250,
+      // This assertion is about preserving a completed process's exit code/output, not
+      // about the 250 ms background-yield boundary. Under the full Windows matrix a fresh
+      // Node child can occasionally take longer than 250 ms to start and exit, in which
+      // case returning a live processId is correct. Give this parity case enough time to
+      // actually reach the completed-process path before making completion assertions.
+      yieldTimeMs: 5_000,
       maxOutputTokens: undefined,
       truncationPolicy,
       cwd: process.cwd(),

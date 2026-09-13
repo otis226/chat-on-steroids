@@ -241,6 +241,10 @@ it('uses existing process custody for nested exec and write_stdin across a conve
   const replacement = randomUUID(), requestId = `wfr_${randomUUID().replaceAll('-', '')}`;
   expect(await rebindSession(a.session.id, a.conversationId, replacement)).toBe(true);
   observeRequestCorrelation({ requestId, conversationId: replacement, sessionId: a.session.id, messageId: randomUUID(), tool: 'exec', observedAt: Date.now() });
-  const continued = await call(requestId, `text(await tools.write_stdin({session_id:${processId},chars:"owner\\r",yield_time_ms:1000}));`);
+  // The custody contract is the assertion here. Under the process-heavy Windows suite a newly
+  // spawned Node child can take longer than one second to consume stdin and exit, so give this
+  // exact owner enough bounded time to reach its terminal result instead of conflating scheduler
+  // contention with a custody failure.
+  const continued = await call(requestId, `text(await tools.write_stdin({session_id:${processId},chars:"owner\\r",yield_time_ms:5000}));`);
   expect(text(continued)).toContain('OWNED_RESULT');
 });

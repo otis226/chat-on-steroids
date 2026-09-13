@@ -617,12 +617,12 @@ describe('settings writes from more than one UI', () => {
     const base = defaultConfig();
     await saveConfig(base);
     const wanted = { ...base, ui: { ...base.ui, tabsToKeepOpen: 6 }, goal: {
-      ...base.goal, helperModel: 'account-helper', helperReasoning: 'medium' as const
+      ...base.goal, helperModel: 'account-helper', helperReasoning: 'medium' as const, helperProject: 'Chat Core Temp'
     } };
     const result = await save(wanted, base);
     expect(result.ok, result.error).toBe(true);
     expect(getConfig().ui.tabsToKeepOpen).toBe(6);
-    expect(getConfig().goal).toMatchObject({ helperModel: 'account-helper', helperReasoning: 'medium', model: base.goal.model });
+    expect(getConfig().goal).toMatchObject({ helperModel: 'account-helper', helperReasoning: 'medium', helperProject: 'Chat Core Temp', model: base.goal.model });
   });
   it('persists the planner backend and preserves it across an unrelated stale settings save', async () => {
     const base = defaultConfig();

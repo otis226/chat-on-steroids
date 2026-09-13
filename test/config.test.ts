@@ -461,12 +461,12 @@ describe('shipped defaults', () => {
 describe('the goal loop settings', () => {
   it('keeps helper settings independent from the API and preserves a chosen idle tab budget', async () => {
     const config = defaultConfig();
-    expect(config.goal).toMatchObject({ helperModel: 'gpt-5.6-sol', helperReasoning: 'high', model: DEFAULT_GOAL_MODEL });
+    expect(config.goal).toMatchObject({ helperModel: 'gpt-5.6-sol', helperReasoning: 'high', helperProject: '', model: DEFAULT_GOAL_MODEL });
     await saveConfig({ ...config, ui: { ...config.ui, tabsToKeepOpen: 7 }, goal: {
-      ...config.goal, model: 'provider/api-model', reasoning: 'low', helperModel: 'account-browser-model', helperReasoning: 'medium'
+      ...config.goal, model: 'provider/api-model', reasoning: 'low', helperModel: 'account-browser-model', helperReasoning: 'medium', helperProject: 'Chat Core Temp'
     } });
     const loaded = await loadConfig();
-    expect(loaded.goal).toMatchObject({ model: 'provider/api-model', reasoning: 'low', helperModel: 'account-browser-model', helperReasoning: 'medium' });
+    expect(loaded.goal).toMatchObject({ model: 'provider/api-model', reasoning: 'low', helperModel: 'account-browser-model', helperReasoning: 'medium', helperProject: 'Chat Core Temp' });
     expect(loaded.ui.tabsToKeepOpen).toBe(7);
   });
   it('is off out of the box', () => {
@@ -506,6 +506,7 @@ describe('the goal loop settings', () => {
       impulseMinutes: 0,
       helperModel: 'gpt-5.6-sol',
       helperReasoning: 'high',
+      helperProject: '',
       enabled: true,
       mode: 'loop',
       provider: { kind: 'openrouter', baseUrl: '' },
@@ -653,6 +654,7 @@ describe('the goal loop settings', () => {
       impulseMinutes: 0,
       helperModel: 'gpt-5.6-sol',
       helperReasoning: 'high',
+      helperProject: '',
       enabled: false,
       mode: 'goal',
       provider: { kind: 'openrouter', baseUrl: '' },

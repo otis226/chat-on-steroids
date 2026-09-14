@@ -2156,10 +2156,29 @@ var CLF_DOM = (() => {
         // actual editor is mounted and ready.
         const source = composer();
         if (!source?.isConnected || !composerSubmitReady() || hasComposerAttachments()) return;
-        const links = [...document.querySelectorAll('header a[href], [role="banner"] a[href]')].filter(link =>
-          link.querySelector('[data-testid="project-folder-icon"]') && !link.closest(OWN_SURFACES) &&
-          new URL(link.href, location.href).origin === location.origin && projectHomeId(new URL(link.href, location.href).pathname) === entry.id);
-        if (links.length !== 1) return;
+        // Project identity is the immutable g-p-* route, not today's presentation of the
+        // breadcrumb. ChatGPT has moved the source-Project link between header/sidebar shells
+        // and has changed/removed the folder-icon test id. Requiring one particular icon in one
+        // particular container made a valid resume wait for twelve seconds and then terminally
+        // fail even though the exact authorized Project link was already on the page.
+        //
+        // Accept any provider-owned anchor for the exact Project route. Several copies are not
+        // ambiguous: they all carry the same immutable authority, so prefer header/banner, then
+        // navigation chrome, then the first remaining shell link. Conversation-turn links are
+        // excluded so authored chat content can never become navigation authority.
+        const links = [...document.querySelectorAll('a[href]')].filter(link => {
+          if (link.closest(OWN_SURFACES) || link.closest(TURN) || link.closest('[hidden],[aria-hidden="true"],[inert]')) return false;
+          try {
+            const url = new URL(link.href, location.href);
+            return url.origin === location.origin && projectHomeId(url.pathname) === entry.id;
+          } catch {
+            return false;
+          }
+        }).sort((left, right) => {
+          const rank = link => link.closest('header,[role="banner"]') ? 0 : link.closest('nav,aside,[role="navigation"]') ? 1 : 2;
+          return rank(left) - rank(right);
+        });
+        if (!links.length) return;
         sourceComposer = source;
         clicked = true;
         // Loading the source and following its link are separate page transitions.

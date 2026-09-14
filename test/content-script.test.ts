@@ -11226,7 +11226,7 @@ describe('the fresh chat the app opened', () => {
    * as history, which is what left the chat with no app session and every later tool call
    * without a provable caller.
    */
-  it.each(['success', 'wrong-link', 'retarget', 'stale-editor'])(
+  it.each(['success', 'moved-link', 'duplicate-link', 'wrong-link', 'retarget', 'stale-editor', 'message-link-only'])(
     'Project resume enters through the source native link and fences the send: %s', async outcome => {
     const project = 'g-p-11111111222233334444555555555555';
     const source = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
@@ -11238,18 +11238,29 @@ describe('the fresh chat the app opened', () => {
         projectEntry: { id: project, sourceConversationId: source }, agent: null } }),
       ack: () => ({ ok: true })
     }, (document, dom) => {
-      const header = document.createElement('header');
-      header.innerHTML = `<a href="/g/${outcome === 'wrong-link' ? 'g-p-99999999222233334444555555555555' : project}-name/project"><span data-testid="project-folder-icon"></span>Project</a>`;
-      document.body.prepend(header);
-      header.querySelector('a')!.addEventListener('click', event => {
+      const shell = document.createElement(outcome === 'moved-link' ? 'div' : 'header');
+      const linkedProject = outcome === 'wrong-link' ? 'g-p-99999999222233334444555555555555' : project;
+      shell.innerHTML = `<a href="/g/${linkedProject}-name/project">Project</a>`;
+      if (outcome === 'duplicate-link') shell.innerHTML += `<a href="/g/${project}/project">Project duplicate</a>`;
+      if (outcome === 'message-link-only') {
+        shell.remove();
+        const turn = document.createElement('section');
+        turn.setAttribute('data-testid', 'conversation-turn-99');
+        turn.innerHTML = `<a href="/g/${project}-name/project">authored Project link</a>`;
+        document.body.prepend(turn);
+        turn.querySelector('a')!.addEventListener('click', event => { event.preventDefault(); clicks++; });
+      } else {
+        document.body.prepend(shell);
+      }
+      for (const link of [...shell.querySelectorAll('a')]) link.addEventListener('click', event => {
         event.preventDefault(); clicks++;
         expect(composerText(document)).toBe('');
         dom.reconfigure({ url: outcome === 'retarget' ? 'https://chatgpt.com/c/bbbbbbbb-1111-4222-8333-444444444444' : `https://chatgpt.com/g/${project}-name/project` });
-        if (outcome === 'success') {
+        if (['success', 'moved-link', 'duplicate-link'].includes(outcome)) {
           const editor = document.getElementById('prompt-textarea')!;
           editor.replaceWith(editor.cloneNode(true));
         }
-        header.remove();
+        shell.remove();
       });
       document.querySelector('[data-testid="send-button"]')!.addEventListener('click', () => {
         sends++;
@@ -11262,10 +11273,11 @@ describe('the fresh chat the app opened', () => {
     expect(live.sent.filter(message => message.type === 'redeem')).toEqual([
       expect.objectContaining({ conversationId: source, projectEntry: true })
     ]);
-    expect(clicks).toBe(outcome === 'wrong-link' ? 0 : 1);
-    expect(sends, JSON.stringify(live.sent.filter(message => ['ack', 'compact'].includes(String(message.type))))).toBe(outcome === 'success' ? 1 : 0);
+    const succeeds = ['success', 'moved-link', 'duplicate-link'].includes(outcome);
+    expect(clicks).toBe(['wrong-link', 'message-link-only'].includes(outcome) ? 0 : 1);
+    expect(sends, JSON.stringify(live.sent.filter(message => ['ack', 'compact'].includes(String(message.type))))).toBe(succeeds ? 1 : 0);
     expect(live.sent.filter(message => message.type === 'ack')).toEqual([
-      expect.objectContaining(outcome === 'success' ? { status: 'sent', conversationId: destination } : { status: 'failed' })
+      expect.objectContaining(succeeds ? { status: 'sent', conversationId: destination } : { status: 'failed' })
     ]);
   });
 

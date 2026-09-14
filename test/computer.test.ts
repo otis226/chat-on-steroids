@@ -239,13 +239,27 @@ describe.runIf(IS_WINDOWS)('desktop helper', () => {
     const shot = state.screenshot!;
     // Different capture, therefore a different region and scale to be mapped against.
     expect(shot.frameId).not.toBe(other.frameId);
-    // A window with no automation tree has no centres to pair. That is a property of the
-    // desktop this happens to run on, not of the mapping under test, so it is a skip rather
-    // than a failure; the checked count below still holds the assertion that matters.
-    if (state.elements.length === 0) return;
+    // A screen fallback may contain pixels from an occluding application, so production
+    // deliberately withholds UIA-to-image mappings there. That is part of the safety contract.
+    if (shot.captureMode === 'screen_fallback') {
+      expect(state.elements.every((element) => element.imageBounds === null && element.imageCenter === null)).toBe(true);
+      return;
+    }
+    // Direct window captures map only controls fully contained by the returned frame. A random
+    // active desktop window can legitimately expose only clipped/off-frame UIA rows, so require
+    // mappings for every element that is actually eligible rather than assuming one must exist.
+    const mappableElements = state.elements.filter((element) =>
+      element.bounds.x >= shot.region.x &&
+      element.bounds.y >= shot.region.y &&
+      element.bounds.x + element.bounds.width <= shot.region.x + shot.region.width &&
+      element.bounds.y + element.bounds.height <= shot.region.y + shot.region.height
+    );
+    if (mappableElements.length === 0) return;
 
     let checked = 0;
-    for (const element of state.elements) {
+    for (const element of mappableElements) {
+      expect(element.imageBounds).not.toBeNull();
+      expect(element.imageCenter).not.toBeNull();
       if (!element.imageBounds || !element.imageCenter) continue;
       checked++;
       // Recompute the mapping from the screenshot that came back with these elements.
@@ -259,7 +273,7 @@ describe.runIf(IS_WINDOWS)('desktop helper', () => {
       expect(element.imageBounds.x + element.imageBounds.width).toBeLessThanOrEqual(shot.width);
       expect(element.imageBounds.y + element.imageBounds.height).toBeLessThanOrEqual(shot.height);
     }
-    expect(checked).toBeGreaterThan(0);
+    expect(checked).toBe(mappableElements.length);
   });
 
   it('refuses a ref minted before the desktop helper restarted', async () => {

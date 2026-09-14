@@ -3094,6 +3094,7 @@ describe('exec_command and write_stdin', () => {
       'session_id',
       'chars',
       'yield_time_ms',
+      'wait_for',
       'max_output_tokens'
     ]);
     expect(stdin.inputSchema.required).toEqual(['session_id']);
@@ -3101,6 +3102,8 @@ describe('exec_command and write_stdin', () => {
     expect(stdin.inputSchema.properties.session_id.type).toBe('number');
     expect(stdin.inputSchema.properties.chars.type).toBe('string');
     expect(stdin.inputSchema.properties.yield_time_ms.type).toBe('number');
+    expect(stdin.inputSchema.properties.wait_for.enum).toEqual(['output', 'exit']);
+    expect(String(stdin.inputSchema.properties.wait_for.description)).toMatch(/non-interactive/i);
     expect(stdin.inputSchema.properties.max_output_tokens.type).toBe('number');
     for (const retired of ['cursor', 'close', 'signal', 'env', 'max_lines']) {
       expect(stdin.inputSchema.properties).not.toHaveProperty(retired);
@@ -3295,6 +3298,33 @@ describe('exec_command and write_stdin', () => {
     expect(defaulted.body.result?.isError).not.toBe(true);
     expect(textOf(defaulted)).toContain('export const name = "app";');
     expect(textOf(defaulted)).not.toContain('default — no cwd was given');
+  });
+
+  it('wait_for=exit keeps intermediate build output local until the process exits', async () => {
+    await fs.writeFile(
+      path.join(approved, 'wait-for-exit.cjs'),
+      "setTimeout(() => console.log('build-progress'), 700); setTimeout(() => { console.log('build-complete'); process.exit(0); }, 1600);\n",
+      'utf8'
+    );
+    const started = await core('tools/call', {
+      name: 'exec_command',
+      arguments: { cmd: 'node wait-for-exit.cjs', workdir: '/workspace', yield_time_ms: 250 }
+    });
+    expect(started.body.result?.isError).not.toBe(true);
+    const sessionId = Number(textOf(started).match(/Process running with session ID (\d+)/)?.[1]);
+    expect(sessionId).toBeGreaterThan(0);
+    expect(textOf(started)).not.toContain('build-progress');
+
+    const waited = await core('tools/call', {
+      name: 'write_stdin',
+      arguments: { session_id: sessionId, wait_for: 'exit', yield_time_ms: 5_000 }
+    });
+    expect(waited.body.result?.isError).not.toBe(true);
+    expect(textOf(waited)).toContain('build-progress');
+    expect(textOf(waited)).toContain('build-complete');
+    expect(textOf(waited)).toContain('Process exited with code 0');
+    expect(waited.body.result?.structuredContent).toMatchObject({ exit_code: 0 });
+    expect(waited.body.result?.structuredContent).not.toHaveProperty('session_id');
   });
 
   it.runIf(IS_WINDOWS)('preserves Codex raw merged output instead of the retired connector CLIXML rewrite', async () => {

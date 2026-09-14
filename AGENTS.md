@@ -546,6 +546,13 @@ One app-lifetime `codex/manager.ts` owns `UnifiedExecProcessManager`. `exec_comm
 returns output or a process `session_id`; `write_stdin` continues that same process, sends input
 or drains output. Caller isolation is in `ownership.ts`, not separate managers per request.
 
+For a still-running non-interactive build, test, package or similar bounded job, use
+`write_stdin(wait_for="exit")` with an appropriate long `yield_time_ms`. Intermediate log chunks
+remain buffered locally and do not force one model/tool round trip per chunk. The default
+`wait_for="output"` preserves the existing interactive/progress behavior and returns when output
+arrives. Do not poll merely because a job is chatty; poll for intermediate output only when that
+output can change the next decision or when interactive input is required.
+
 The owner is the **durable local session principal** established by correlation. A→B compaction
 keeps that principal, so B can continue A's live terminal without an adoption/move fallback.
 Another session/worker cannot poll or write it. Anonymous process custody is non-adoptable.

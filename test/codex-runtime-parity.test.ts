@@ -319,6 +319,45 @@ describe('Codex unified exec runtime parity', () => {
     expect(polled.processId).toBe(processId);
   });
 
+  it('waits through intermediate output when write_stdin is waiting for exit', async () => {
+    const instance = manager();
+    managers.push(instance);
+    const processId = instance.allocateProcessId();
+    const initial = await instance.execCommand({
+      command: [
+        process.execPath,
+        '-e',
+        "setTimeout(() => process.stdout.write('build-progress\\n'), 700); setTimeout(() => { process.stdout.write('build-done\\n'); process.exit(0); }, 1_600)"
+      ],
+      shellType: process.platform === 'win32' ? 'powershell' : 'bash',
+      hookCommand: 'wait-for-exit child',
+      processId,
+      yieldTimeMs: 250,
+      maxOutputTokens: undefined,
+      truncationPolicy,
+      cwd: process.cwd(),
+      displayCwd: process.cwd(),
+      env: applyUnifiedExecEnv(process.env),
+      tty: false
+    });
+    expect(initial.processId).toBe(processId);
+    expect(initial.rawOutput.toString('utf8')).not.toContain('build-progress');
+
+    const waited = await instance.writeStdin({
+      processId,
+      input: '',
+      yieldTimeMs: 5_000,
+      waitFor: 'exit',
+      maxOutputTokens: undefined,
+      truncationPolicy
+    });
+    expect(waited.rawOutput.toString('utf8')).toContain('build-progress');
+    expect(waited.rawOutput.toString('utf8')).toContain('build-done');
+    expect(waited.processId).toBeNull();
+    expect(waited.exitCode).toBe(0);
+    expect(waited.wallTimeMs).toBeGreaterThan(900);
+  });
+
   it.runIf(process.platform === 'win32')('forces UTF-8 for PowerShell pipe output like Codex', async () => {
     const shell = getShell('powershell');
     expect(shell).not.toBeNull();

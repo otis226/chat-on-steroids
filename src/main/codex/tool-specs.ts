@@ -90,7 +90,7 @@ export const EXEC_COMMAND_LOGIN_DESCRIPTION =
     : 'True runs the shell with -l/-i semantics; false disables them. Defaults to true.';
 
 export const WRITE_STDIN_DESCRIPTION =
-  'Writes characters to an existing unified exec session and returns recent output. Use the exact returned session ID for input, progress or waiting. Completed background output also follows automatically on later tool responses; after a transient wait failure, retry the same session ID rather than starting replacement work.';
+  'Writes characters to an existing unified exec session and returns recent output. Use the exact returned session ID. For interactive work or deliberate progress reads, keep wait_for="output". For non-interactive builds, tests and packaging jobs, use wait_for="exit" so local log output is buffered and one call waits for process completion or the requested timeout instead of returning on every chunk. Completed background output also follows automatically on later tool responses; after a transient wait failure, retry the same session ID rather than starting replacement work.';
 
 export const WRITE_STDIN_SESSION_ID_DESCRIPTION = 'Identifier of the running unified exec session.';
 
@@ -98,7 +98,10 @@ export const WRITE_STDIN_CHARS_DESCRIPTION =
   'Bytes to write to stdin. Defaults to empty, which polls without writing.';
 
 export const WRITE_STDIN_YIELD_TIME_DESCRIPTION =
-  'Wait before yielding output. Non-empty writes default to 250 ms and cap at 30000 ms; empty polls wait up to 5000-300000 ms by default but return early when the first output arrives.';
+  'Maximum local wait. Non-empty writes default to 250 ms and cap at 30000 ms. Empty waits use a 5000 ms minimum and may wait up to 300000 ms. With wait_for="output" they return early on the first output; with wait_for="exit" output stays buffered until the process exits or this timeout expires.';
+
+export const WRITE_STDIN_WAIT_FOR_DESCRIPTION =
+  'What ends an empty wait. "output" is the backward-compatible interactive behavior and returns when any output arrives. "exit" is for non-interactive builds/tests/package jobs: keep buffering local output and return only when the process exits or yield_time_ms expires. Defaults to "output".';
 
 /**
  * `APPLY_PATCH_LARK_GRAMMAR` (`core/src/tools/handlers/apply_patch.lark`).

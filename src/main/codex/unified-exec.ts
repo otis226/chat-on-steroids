@@ -631,6 +631,7 @@ export interface WriteStdinRequest {
   processId: number;
   input: string;
   yieldTimeMs: number;
+  waitFor?: 'output' | 'exit';
   maxOutputTokens: number | undefined;
   truncationPolicy: TruncationPolicy;
   maxWriteStdinYieldTimeMs?: number;
@@ -849,11 +850,13 @@ export class UnifiedExecProcessManager {
 
       const start = Date.now();
       const wallStart = performance.now();
-      // Empty calls are polls, not collection windows. Once the process produces anything,
-      // returning it immediately saves the caller another multi-second connector round trip;
-      // bytes that arrive later remain in the draining buffer for the next poll. Non-empty
-      // writes keep Codex's collection-window behavior so one interactive response is gathered.
-      const collected = await collectOutputUntilDeadline(process, start + yieldTimeMs, request.input === '');
+      // The default preserves the existing interactive poll contract: an empty call returns as
+      // soon as output arrives. Long non-interactive jobs can opt into `waitFor: 'exit'`; their
+      // logs stay in this local draining buffer and one connector call waits until the child exits
+      // or the caller's deadline expires. This removes one model/tool round trip per log chunk
+      // without changing process custody, output bounds or timeout semantics.
+      const returnOnFirstOutput = request.input === '' && request.waitFor !== 'exit';
+      const collected = await collectOutputUntilDeadline(process, start + yieldTimeMs, returnOnFirstOutput);
       const wallTimeMs = Math.max(0, performance.now() - wallStart);
 
       const visible = collected.display ?? collected.raw;

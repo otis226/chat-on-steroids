@@ -88,7 +88,8 @@ import {
   WRITE_STDIN_CHARS_DESCRIPTION,
   WRITE_STDIN_DESCRIPTION,
   WRITE_STDIN_SESSION_ID_DESCRIPTION,
-  WRITE_STDIN_YIELD_TIME_DESCRIPTION
+  WRITE_STDIN_YIELD_TIME_DESCRIPTION,
+  WRITE_STDIN_WAIT_FOR_DESCRIPTION
 } from '../codex/tool-specs.js';
 import { lineDelta } from '../diffstat.js';
 import {
@@ -920,6 +921,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
             session_id: int32Number.describe(WRITE_STDIN_SESSION_ID_DESCRIPTION),
             chars: z.string().optional().describe(WRITE_STDIN_CHARS_DESCRIPTION),
             yield_time_ms: unsignedIntegerNumber.optional().describe(WRITE_STDIN_YIELD_TIME_DESCRIPTION),
+            wait_for: z.enum(['output', 'exit']).optional().describe(WRITE_STDIN_WAIT_FOR_DESCRIPTION),
             max_output_tokens: unsignedIntegerNumber.optional().describe(MAX_OUTPUT_TOKENS_DESCRIPTION)
           })
           .strict(),
@@ -944,6 +946,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
               processId: input.session_id,
               input: input.chars ?? '',
               yieldTimeMs: input.yield_time_ms ?? DEFAULT_WRITE_STDIN_YIELD_TIME_MS,
+              waitFor: input.wait_for ?? 'output',
               maxOutputTokens: undefined,
               truncationPolicy: EXEC_OUTPUT_CEILING_POLICY
             });

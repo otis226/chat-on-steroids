@@ -85,7 +85,7 @@ function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform): string {
       'Use rg or rg --files for repository searches; if unavailable, use the next best tool.',
       'exec_command runs git, builds, tests and shell commands. Batch related checks with exec_command cmds: [...]; they run sequentially in one shell with per-command output and exit codes.',
       'Set workdir to the project. workdir accepts virtual paths; paths inside cmd are not translated, so use paths relative to workdir or native filesystem paths.',
-      'A running command returns a session_id. Continue that same process with write_stdin; inspect its terminal result before reporting completion. After a transient wait failure, keep the same session instead of starting replacement work.',
+      'A running command returns a session_id. Continue that same process with write_stdin and inspect its terminal result before reporting completion. For non-interactive builds/tests/package jobs, prefer one write_stdin wait_for="exit" with a suitable long yield_time_ms instead of polling every log chunk. Use wait_for="output" only for interactive input or when an intermediate progress read is actually useful. After a transient wait failure, keep the same session instead of starting replacement work.',
       'Output is capped. When truncated, narrow the command or read the relevant region rather than repeating the same request.'
     );
     if (windows) lines.push(

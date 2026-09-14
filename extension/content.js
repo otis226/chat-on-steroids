@@ -10387,6 +10387,10 @@
       const ownedEpoch = epoch, appId = view.appId;
       const stillCurrent = () => current() && epoch === ownedEpoch && new URL(location.href).hash === `#settings/Plugins/plugin_${appId}`;
       const before = schemaKey(view.tools), expected = schemaKey(request.tools);
+      if (request.verificationOnly === true) {
+        if (before !== expected) return false;
+        return (await ask({ type: 'plugin_refresh', action: 'current', id: request.id, appId, connectorName: request.connectorName, tools: view.tools }))?.data?.ok === true && stillCurrent();
+      }
       if (before === expected) {
         return (await ask({ type: 'plugin_refresh', action: 'current', id: request.id, appId, connectorName: request.connectorName, tools: view.tools }))?.data?.ok === true && stillCurrent();
       }

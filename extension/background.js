@@ -2080,7 +2080,9 @@ function inspectRequestedPluginRefresh(publications, background, browserOnly = f
     const held = tabs.find(tab => requests.some(request => request.id === pluginRefreshMarker(tab)));
     const request = requests.find(request => request.id === pluginRefreshMarker(held)) || requests[0];
     if (!held) {
-      if (browserOnly) return;
+      // An earlier click is never retried automatically. A verification-only request
+      // may inspect an explicitly opened marked helper, but it cannot create one itself.
+      if (browserOnly || request.verificationOnly === true) return;
       try {
         const tab = await createChatTab(`https://chatgpt.com/?cos-plugin-refresh=${request.id}#settings/Plugins${request.appId ? `/plugin_${request.appId}` : ''}`, background);
         await chrome.storage.session.set({ pluginRefreshOwner: { id: request.id, tab: tab.id } });

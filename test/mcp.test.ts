@@ -1968,24 +1968,20 @@ describe('sandbox enforcement through the tool layer', () => {
   });
 
   /**
-   * Every worked example the model is shown must name a root that exists, and no error may send
-   * it after a tool that does not. Both cost a refused call and a retry, and neither is visible
-   * from inside the app.
+   * Public tool schemas are shared by every machine using the same ChatGPT app identity, so they
+   * must describe root semantics without embedding one host's exact roots. Exact live roots remain
+   * in initialize instructions and refusal text, where they can safely vary per machine.
    */
-  it('names only live roots and live tools in what the model is shown', async () => {
+  it('keeps machine-specific roots out of the public tool schema while preserving root semantics', async () => {
     const read = toolList(await core('tools/list')).find((tool) => tool.name === 'read')!;
     const paths = String(read.inputSchema.properties.paths.description);
-    expect(paths).toContain('/workspace');
+    expect(paths).toContain('approved roots named in the connector instructions');
+    expect(paths).not.toContain('/workspace');
     // `/project` is nobody's root; it was a hardcoded example the model could not act on.
     expect(paths).not.toContain('/project');
 
-    // Nor may anything be invented *after* the root. `/workspace/src/main.ts` named a live
-    // root and was still a worked example the model could not act on, and a worse one than
-    // `/project`: a project-shaped suffix reads as a promise that the root is the project.
-    // An approved root is routinely a parent holding several, and reading it the other way
-    // is what produced `/<root>/AGENTS.md` for a file one folder deeper — the most repeated
-    // read failure in the recorded corpus. What replaces it is the relationship, not another
-    // path, so there is nothing left here that can go stale.
+    // Nor may the shared schema invent a machine-specific example after a root. What replaces
+    // those examples is the durable relationship between an approved root and the project.
     expect(paths).not.toMatch(/\/workspace\/\S+\.\w+/);
     expect(paths).toContain('parent of the project');
     expect(paths).toContain('workdir');

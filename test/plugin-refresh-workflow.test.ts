@@ -7,7 +7,7 @@ const source = readFileSync(new URL('../extension/content.js', import.meta.url),
 const section = source.slice(source.indexOf('  let pluginRefreshBusy = false;'), source.indexOf('  function catalogPageReady('));
 const id = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 const tools = [{ name: 'read', description: 'Read current.', inputSchema: { type: 'object' } }];
-function workflow(options: { unchanged?: boolean; deny?: boolean; navigateDuringClaim?: boolean; refreshAvailable?: boolean } = {}) {
+function workflow(options: { unchanged?: boolean; deny?: boolean; navigateDuringClaim?: boolean; refreshAvailable?: boolean; verificationOnly?: boolean } = {}) {
   let refreshed = false;
   const click = vi.fn(() => { refreshed = true; });
   const context = vm.createContext({ URL, alive: true, generating: false, epoch: 1,
@@ -21,7 +21,8 @@ function workflow(options: { unchanged?: boolean; deny?: boolean; navigateDuring
   });
   context.ask = ask;
   vm.runInContext(`${section}\nwaitPageView = async (read, current) => current() ? read() : null; globalThis.run = refreshManagedPlugin;`, context);
-  return { click, ask, run: () => (context.run as Function)({ id, appId: 'asdk_app_synthetic', connectorName: 'Chat On Steroids Core', tools }) };
+  return { click, ask, run: () => (context.run as Function)({ id, appId: 'asdk_app_synthetic', connectorName: 'Chat On Steroids Core', tools,
+    ...(options.verificationOnly ? { verificationOnly: true } : {}) }) };
 }
 it('claims before exactly one click and completes only a newly observed matching schema', async () => {
   const h = workflow();
@@ -83,6 +84,18 @@ it('records an already current schema when the workspace exposes no Refresh cont
   expect(await h.run()).toBe(true);
   expect(h.click).not.toHaveBeenCalled();
   expect(h.ask.mock.calls.map(([message]) => message.action)).toEqual(['current']);
+});
+it('verification-only settles a current schema without claiming or clicking again', async () => {
+  const h = workflow({ unchanged: true, verificationOnly: true });
+  expect(await h.run()).toBe(true);
+  expect(h.click).not.toHaveBeenCalled();
+  expect(h.ask.mock.calls.map(([message]) => message.action)).toEqual(['current']);
+});
+it('verification-only leaves a stale schema untouched and never claims or clicks again', async () => {
+  const h = workflow({ verificationOnly: true });
+  expect(await h.run()).toBe(false);
+  expect(h.click).not.toHaveBeenCalled();
+  expect(h.ask).not.toHaveBeenCalled();
 });
 it('stops automatic retry when a changed schema has no Refresh control', async () => {
   const h = workflow({ refreshAvailable: false });

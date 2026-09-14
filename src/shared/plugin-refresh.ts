@@ -15,4 +15,6 @@ export interface PluginPublication {
 export interface PluginRefreshRequest extends PluginPublication {
   id: string;
   appId: string | null;
+  /** A prior refresh click was already claimed. Inspect only; never claim or click again. */
+  verificationOnly?: boolean;
 }

@@ -39,6 +39,16 @@ it('does not create a plugin helper in browser-only mode', async () => {
   expect(create).not.toHaveBeenCalled();
 });
 
+it('does not create a helper for verification-only work after a prior click', async () => {
+  const create = vi.fn();
+  const context = vm.createContext({ URL, setTimeout, clearTimeout, CHATGPT_TAB_URLS: ['https://chatgpt.com/*'], createChatTab: create,
+    call: async () => ({ ok: true, data: { requests: [{ id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', appId: 'asdk_app_synthetic', verificationOnly: true }] } }),
+    chrome: { storage: { session: { get: async () => ({}) } }, tabs: { query: async () => [] } } });
+  vm.runInContext(`${workflow}\nglobalThis.run = inspectRequestedPluginRefresh;`, context);
+  await context.run([{}], true);
+  expect(create).not.toHaveBeenCalled();
+});
+
 it('records browser creation failure before claim and retries the same obligation', async () => {
   const request = { id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', appId: 'asdk_app_synthetic' };
   const call = vi.fn(async (_path: string, init: { body: string }) => JSON.parse(init.body).action === 'pending'

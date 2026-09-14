@@ -99,8 +99,10 @@ export function pendingPluginRefreshes(): Promise<PluginRefreshRequest[]> {
     }
     return current.flatMap(row => {
       const publication = publications.get(row.surface);
-      return publication && (settling.get(row.surface)?.readyAt ?? 0) <= Date.now() && publication.schemaId === row.schemaId && !row.attempted && !row.manual && row.completedSchemaId !== row.schemaId
-        ? [{ ...structuredClone(publication), id: row.id, appId: row.appId }] : [];
+      if (!publication || (settling.get(row.surface)?.readyAt ?? 0) > Date.now() || publication.schemaId !== row.schemaId ||
+          row.manual || row.completedSchemaId === row.schemaId) return [];
+      return [{ ...structuredClone(publication), id: row.id, appId: row.appId,
+        ...(row.attempted ? { verificationOnly: true } : {}) }];
     });
   });
 }
@@ -113,19 +115,24 @@ function exact(current: Row[], identity: Identity): Row | undefined {
 export function claimPluginRefresh(input: Identity & { connectorName: string; tools: unknown; alreadyCurrent?: boolean }): Promise<boolean> {
   return serial(async () => {
     const current = await rows(); const row = exact(current, input);
-    if (!row || row.attempted || row.manual || row.completedSchemaId === row.schemaId || !recognizable(input.tools, row.surface)) return false;
+    if (!row || row.manual || row.completedSchemaId === row.schemaId || !recognizable(input.tools, row.surface)) return false;
     const publication = publications.get(row.surface)!;
     // Unique-name discovery is initial enrollment only. Stale definitions can still
     // identify the surface; the complete post-refresh declarations must match below.
     if (row.appId ? row.appId !== input.appId : input.connectorName !== publication.connectorName || !enrollable(input.tools, publication)) return false;
     if (current.some(other => other !== row && other.appId === input.appId)) return false;
     const isCurrent = matches(input.tools, publication.tools, row.surface);
-    if (input.alreadyCurrent === true ? !isCurrent : isCurrent) return false;
-    row.appId = input.appId; row.attempted = true;
-    delete row.error;
     // Enrollment/migration may find the installed declaration already current. Record
     // that observation without clicking Refresh or manufacturing a new plugin version.
-    if (input.alreadyCurrent) row.completedSchemaId = row.schemaId;
+    // The same proof may also reconcile an earlier ambiguous click, including one made
+    // by another machine sharing this exact ChatGPT app identity.
+    if (input.alreadyCurrent) {
+      if (!isCurrent) return false;
+      row.appId = input.appId; row.completedSchemaId = row.schemaId; delete row.error;
+      await writeDurableNow('plugin-refresh', current); return true;
+    }
+    if (row.attempted || isCurrent) return false;
+    row.appId = input.appId; row.attempted = true; delete row.error;
     await writeDurableNow('plugin-refresh', current); return true;
   });
 }

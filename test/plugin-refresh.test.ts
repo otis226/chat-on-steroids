@@ -132,7 +132,7 @@ it('keeps pre-claim errors observable and retries the same obligation after rest
   expect((await readDurable('plugin-refresh') as any[])[0].attempted).toBe(false);
   expect(await claim(request)).toBe(true);
   expect((await readDurable('plugin-refresh') as any[])[0].error).toBeUndefined();
-  expect(await pendingPluginRefreshes()).toEqual([]);
+  expect((await pendingPluginRefreshes())[0]).toMatchObject({ id: request.id, appId, verificationOnly: true });
 });
 it('requires readable declarations before claiming even an enrolled exact app', async () => {
   publish(); const first = (await pendingPluginRefreshes())[0]!;
@@ -161,16 +161,19 @@ it('repairs legacy impossible click receipts only when no concrete app was ever 
   await writeDurableNow('plugin-refresh', stored);
   expect((await pendingPluginRefreshes())[0]?.id).toBe(request.id);
   await claim(request);
-  expect(await pendingPluginRefreshes()).toEqual([]);
+  expect((await pendingPluginRefreshes())[0]).toMatchObject({ id: request.id, appId, verificationOnly: true });
 });
-it('admits one concurrent click and never automatically reclaims it after a crash or failure', async () => {
+it('admits one concurrent click and reoffers it only for current-schema verification', async () => {
   publish(); const request = (await pendingPluginRefreshes())[0]!;
   expect(await Promise.all([claim(request), claim(request)])).toEqual([true, false]);
   resetPluginRefreshForTests(); publish();
-  expect(await pendingPluginRefreshes()).toEqual([]);
+  expect((await pendingPluginRefreshes())[0]).toMatchObject({ id: request.id, appId, verificationOnly: true });
+  expect(await claim(request)).toBe(false);
   expect(await failPluginRefresh({ ...request, error: 'Refresh outcome unavailable' })).toBe(true);
+  resetPluginRefreshForTests(); publish();
+  expect((await pendingPluginRefreshes())[0]).toMatchObject({ id: request.id, appId, verificationOnly: true });
+  expect(await claimPluginRefresh({ ...request, appId, connectorName: 'Chat On Steroids Core', tools, alreadyCurrent: true })).toBe(true);
   expect(await pendingPluginRefreshes()).toEqual([]);
-  expect(await completePluginRefresh({ ...request, appId, tools })).toBe(true);
 });
 it('does not let an unpublished connector accept a receipt', async () => {
   publish(); const request = (await pendingPluginRefreshes())[0]!; await claim(request);

@@ -9,37 +9,60 @@
  * worth having in one named place whatever ends up reading it.
  */
 
+/** Stable marker for a semantic continuation packet. */
+export const WORKING_SET_MARKER = 'CONTINUATION WORKING SET v1';
+
 /** The rules and headings. */
-export const HANDOFF_BRIEF_RULES = `Rules:
-- Treat the user's messages as the highest-authority source in the entire handoff. They are the specification. Preserve the original task, every requirement, every later correction, every constraint, every explicit preference, and every request about what should happen next. If a later message changed an earlier requirement, state the final position and say that it changed. Never let an assistant plan, guess, TODO, or tool-side interpretation override what the user actually said.
-- Preserve the substance of every user message that could matter to continuing the work, even when it is conversational, repetitive, frustrated, shorthand, or speech-to-text. Collapse duplicates only when their meaning is genuinely identical; preserve differences, changed decisions, priorities, and corrections.
-- Never drop a requirement because it looks minor or because it was not worked on. Unfinished requirements matter most.
-- Use the tool evidence to decide what is actually done. An assistant message saying it will do something is not evidence that it happened; a recorded tool call that succeeded is. Say plainly which is which.
-- Keep exact identifiers: file paths, function names, versions, ports, hashes, ids, command lines, error text. Do not paraphrase them.
-- Make the current state the centre of the brief: what is complete and verified · what is currently in progress and exactly where it stopped · what is planned/decided but not implemented yet · what was attempted and failed · what was only discussed · what is still to do. Write enough state that the next agent can choose its very next tool call without rediscovering the session.
-- Include failures and unresolved bugs with the actual error, and say what was already tried so it is not repeated.
-- AGENT MESSAGE lines are traffic with other agents in a multi-agent run. One delivered to this agent is a report about work done outside this recording — treat it as the only evidence of that work and keep its substance. One sent by this agent is work already delegated; say who is doing it so it is not delegated again.
-- State the current state of the repository, install and running processes as far as the recording shows it.
-- Preserve causal links, not just facts. When a bug, design decision or patch exists because of a specific observed failure, keep the failure → root cause → change → verification chain together. Keep known-good and known-bad behaviours distinct.
-- Treat the brief as a lossless operational compression, not an executive summary. Prefer completeness over brevity. For a substantial coding/debugging session, target roughly 10,000–30,000 tokens when the material warrants it and use the available answer budget aggressively; a ~6,000-token brief is normally too short when the conversation contains many user corrections, tool calls, patches, tests, agent reports or unresolved branches. Shorter is appropriate only when there genuinely is less useful state to preserve. Never exceed 30,000 tokens.
-- Spend extra space on concrete continuation value: exact changed files and symbols, dirty-tree caveats, test/build commands and outcomes, live-session evidence, current hypotheses with confidence, rejected approaches and why, pending worker ownership, release/install state, and the precise next actions. Do not spend that space repeating prose or narrating obvious chronology.
-- Be dense and operational even when long. No preamble, no praise, no restating these instructions, no "in this session we". Use compact sections, bullets and short lines so a 10k–30k-token brief remains navigable rather than repetitive.
-- If the recording is incomplete or ambiguous, say so in one line rather than inventing detail.
+export const HANDOFF_BRIEF_RULES = `You are not writing a chat summary or a transcript digest. You are compiling the current work into a continuation working set that another capable agent can execute immediately.
 
-Structure the brief with these headings, omitting any that would be empty:
+Rules:
+- Treat the user's messages as the highest-authority source. Resolve corrections and changed decisions into the final current contract. Do not preserve superseded wording as if both versions remain active; mention the superseded position only when it prevents a likely regression.
+- Preserve the user's full material intent, constraints, preferences and unfinished requirements, but collapse repetition and conversation chronology into resolved meaning.
+- Preserve reasoning that has already been paid for. When the session discovered a root cause, architecture boundary, rejected approach, ownership decision or causal chain, keep the conclusion and enough mechanism that the next agent does not need to rediscover it.
+- Do not narrate the conversation turn by turn. Do not copy raw tool logs, long command output, assistant prose, repeated status updates, or every explored hypothesis. Convert exploration into the final useful knowledge: what was learned, what was rejected and why, and what evidence supports the current direction.
+- Keep exact operational identifiers that let the next agent act immediately: repository/worktree, branch/SHA, file paths, symbols, commands, errors, ports, process/runtime state, test names/results, artifact hashes and durable ids when they still matter.
+- Use tool/runtime evidence to distinguish verified fact from claim or plan. An assistant saying something is done is not evidence. Preserve the strongest current evidence and whether it remains valid for the current candidate.
+- Make the packet executable. A capable agent reading only this working set should know the exact current state, why the chosen direction is correct, which files/symbols own the work, what has already been tried, and the very next tool call or mutation to make. It should not need to rescan the repository merely to reconstruct reasoning already completed here.
+- Keep failed/rejected paths only when they save future rediscovery. State the failure or contradiction and the reason the path was rejected; do not preserve abandoned implementation detail that no longer affects the work.
+- Keep unresolved uncertainty explicit. Never turn a guess into a requirement or verified fact.
+- AGENT MESSAGE lines are external worker traffic. Preserve only the durable result, ownership still in flight, or evidence the main agent needs to integrate; do not replay worker chatter.
+- The raw session remains available as evidence. This packet is the default transfer state, not the only historical record. Prefer semantic density over archival completeness.
+- For substantial engineering work, normally target roughly 3,000–12,000 tokens. Use more only when the active contract, resolved reasoning, implementation map and evidence genuinely require it; never exceed 20,000 tokens. A short packet is acceptable only when it still lets the next agent continue without rediscovery.
+- No preamble, praise, retrospective narration or closing remark. Dense sections, bullets and short causal chains are preferred.
 
-TASK — the original goal, in the user's terms.
-USER SPECIFICATION — every material user request, constraint, preference, correction and changed decision, with the final position explicit. This is the authoritative section.
-CURRENT STATE — what is true right now: repository/app/session state, active implementation, versions, processes, and latest relevant observed behaviour.
-DONE — completed and verified, with the evidence.
-IN PROGRESS — started, not finished, and exactly where it stopped.
-PLANNED / DECIDED — concrete work the user or agent decided should happen next but that tool evidence does not show as completed yet.
-FAILED / UNRESOLVED — what broke, the error, what was already tried.
-FILES — paths touched or inspected that matter to continuation, what changed in each, and important symbols/line regions when known.
-VERIFICATION — tests, builds, smoke checks and live evidence already run, with exact commands/results and what remains unverified.
-ENVIRONMENT — commands, versions, running processes, repo/dirty-tree state, installation/release state, and anything the next agent must preserve.
-NEXT — the concrete next actions, in order.
-DO NOT — what the next agent should not redo or undo.`;
+Write exactly these sections, keeping empty sections as "None" so downstream readers can rely on the shape:
+
+${WORKING_SET_MARKER}
+
+OBJECTIVE
+The current user goal and finish line in the user's terms.
+
+USER CONTRACT
+Current authoritative requirements, constraints, preferences and corrections. Resolve conflicts to the final position.
+
+RESOLVED REASONING
+Important conclusions already established: root causes, invariants, architecture/ownership boundaries, why the current direction was chosen, and rejected paths that must not be retried.
+
+CURRENT STATE
+What is true now: repository/worktree/branch/candidate, current implementation, runtime/install/process state, active worker ownership, and any dirty-tree caveats.
+
+IMPLEMENTATION MAP
+Exact files, symbols, interfaces and seams that own the remaining work, with what each currently does or needs to change.
+
+EVIDENCE
+Only still-valid verification and operational evidence: tests/builds/smokes/live behaviour, exact errors, commands or hashes when useful. Separate verified, failed and unverified claims.
+
+REMAINING WORK
+Concrete unresolved requirements, defects, blockers and checks that still have to happen.
+
+NEXT ACTION
+Ordered executable continuation. The first item must be specific enough that the next agent can act immediately without another discovery pass.
+
+EVIDENCE INDEX
+Pointers for optional drill-down when needed: session/message/event identity, commits, files/symbols, test names, artifacts or other provenance. Do not copy the evidence bodies.
+
+DO NOT REDO
+Resolved investigations, rejected approaches, dangerous mutations, or already-valid verification that should not be repeated unless later changes invalidate it.`;
 
 /**
  * The instruction typed into the ChatGPT conversation being compacted.
@@ -65,14 +88,15 @@ export function nativeHandoffPrompt(token = '', includeToolCalls = true): string
     (identity ? `${identity}\n\n` : '') +
     'Chat On Steroids is compacting this conversation so a fresh chat can continue the work. ' +
     'Stop whatever you were doing and do only this.\n\n' +
-    'Write a handoff brief so a different coding agent can continue this unfinished task in a brand-new ' +
+    'Compile a continuation working set so a different coding agent can continue this unfinished task in a brand-new ' +
     "conversation, with no memory of anything here. Everything you know about this session — the user's " +
     (includeToolCalls ? 'messages, your own replies, and every tool call you made against this machine with its result — is the ' :
       'messages and your own replies, including interim updates — is the ') +
-    'material. Write it so an agent who reads only your brief can carry on correctly.\n\n' +
+    'material. Read all of it, resolve it, then transfer the resulting working knowledge rather than replaying the log. ' +
+    'Write it so an agent who reads only the working set can carry on correctly.\n\n' +
     `${HANDOFF_BRIEF_RULES}\n\n` +
-    (includeToolCalls ? '' : 'Tool-detail setting: preserve verified outcomes and distinguish them from claims, but omit raw tool-call arguments and result bodies from the brief. Do not copy tool transcripts. This setting controls the brief, not the history you already saw.\n\n') +
-    'Your reply to this message must be the brief itself and nothing else: no preamble, no closing remark, no ' +
+    (includeToolCalls ? 'Tool-detail setting: you may use the full tool history to reason, but do not copy raw tool transcripts into the working set. Preserve resolved outcomes, exact still-useful identifiers and evidence pointers.\n\n' : 'Tool-detail setting: preserve verified outcomes and distinguish them from claims, but omit raw tool-call arguments and result bodies. Do not copy tool transcripts. This setting controls the working set, not the history you already saw.\n\n') +
+    'Your reply to this message must be the working set itself and nothing else: no preamble, no closing remark, no ' +
     'question back, and no tool calls. The app reads this reply, stores it, and opens the fresh chat with it.'
   );
 }

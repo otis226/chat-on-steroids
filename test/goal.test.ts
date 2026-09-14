@@ -423,7 +423,9 @@ describe('what leaves this machine', () => {
     expect(sent.body.messages[0].content).toBe(customPrompt);
     expect(sent.body.messages[1]).toMatchObject({ role: 'system' });
     expect(sent.body.messages[1].content).toContain('response schema');
-    expect(sent.body.messages.slice(2, -1)).toEqual([
+    expect(sent.body.messages[2]).toMatchObject({ role: 'system' });
+    expect(sent.body.messages[2].content).toContain('CONTINUATION WORKING SET v1');
+    expect(sent.body.messages.slice(3, -1)).toEqual([
       { role: 'user', content: 'build the parser' },
       { role: 'assistant', content: 'parser written, tests pending' }
     ]);

@@ -25,6 +25,7 @@ const {
   sessionsRoot
 } = await import('../src/main/session/store.js');
 const { prepareHandoff, resumeBootstrapMatches, resumeBootstrapText } = await import('../src/main/session/handoff.js');
+const { WORKING_SET_MARKER } = await import('../src/main/session/handoff-prompt.js');
 const goal = await import('../src/main/goal.js');
 const { makeTempDir, removeTempDir } = await import('./helpers.js');
 
@@ -140,6 +141,186 @@ it('sends the Compact & Resume handoff to Goal as chat B actually received it', 
   ]);
   expect(transcript.filter((message) => message.content === bootstrap)).toHaveLength(1);
   expect(transcript[2]!.content).toContain(handoff.text);
+});
+
+it('uses a semantic working set as Goal state and sends only the post-resume delta', async () => {
+  const from = '11111111-aaaa-4111-8111-aaaaaaaaaaaa';
+  const to = '22222222-bbbb-4222-8222-bbbbbbbbbbbb';
+  const session = await createSession({ title: 'semantic resume', conversationId: from });
+  const original = 'Original request that should be compiled into the working set, not replayed after resume.';
+  const discardedExploration = 'Old exploration: inspect three possible approaches and compare them before choosing one.';
+  const sections = [
+    ['OBJECTIVE', 'Finish the selected durable-state repair and verify the real runtime.'],
+    ['USER CONTRACT', 'Preserve the current architecture. Do not restart discovery or widen scope.'],
+    ['RESOLVED REASONING', 'Approach B was chosen because A duplicates authority and C loses crash recovery. Do not reconsider A/C unless new evidence contradicts this.'],
+    ['CURRENT STATE', 'Branch fix/semantic-state is active; the source chat already completed discovery.'],
+    ['IMPLEMENTATION MAP', 'src/main/goal.ts owns Goal projection; src/main/session/handoff.ts owns transfer.'],
+    ['EVIDENCE', `Focused tests passed before compaction. Runtime verification remains outstanding. RICH_EVIDENCE_START ${'e'.repeat(16_000)} RICH_EVIDENCE_END`],
+    ['REMAINING WORK', 'Implement the remaining seam, run affected tests, then package and smoke the exact candidate.'],
+    ['NEXT ACTION', 'Open src/main/goal.ts at conversationMessages() and continue the prepared patch.'],
+    ['EVIDENCE INDEX', 'src/main/goal.ts::conversationMessages; test/goal-resume-handoff.test.ts.'],
+    ['DO NOT REDO', 'Do not rescan alternatives A/C or rerun already-valid unrelated suites.']
+  ];
+  const workingSet = [WORKING_SET_MARKER, '', ...sections.flatMap(([heading, body]) => [heading, body, ''])].join('\n');
+
+  await appendEvent(session.id, {
+    time: 1_000,
+    source: 'extension',
+    kind: 'user_message',
+    messageId: 'semantic-original',
+    message: { text: original, truncated: false, chars: original.length }
+  });
+  await appendEvent(session.id, {
+    time: 1_500,
+    source: 'extension',
+    kind: 'assistant_message',
+    messageId: 'semantic-exploration',
+    final: true,
+    message: { text: discardedExploration, truncated: false, chars: discardedExploration.length }
+  });
+  await appendEvent(session.id, {
+    time: 2_000,
+    source: 'extension',
+    kind: 'assistant_message',
+    messageId: 'semantic-handoff-answer',
+    final: true,
+    message: { text: workingSet, truncated: false, chars: workingSet.length }
+  });
+  const handoff = await prepareHandoff({ sessionId: session.id, text: workingSet, sourceTokens: 80_000 });
+  expect(handoff.format).toBe('working-set-v1');
+  await appendEvent(session.id, {
+    time: 2_500,
+    source: 'app',
+    kind: 'handoff',
+    handoffId: handoff.id,
+    chars: handoff.text.length,
+    reason: 'compact and resume'
+  });
+  expect(await rebindSession(session.id, from, to, handoff.id)).toBe(true);
+  const bootstrap = resumeBootstrapText(handoff.text);
+  await appendEvent(session.id, {
+    time: 3_000,
+    source: 'extension',
+    kind: 'user_message',
+    messageId: 'semantic-bootstrap',
+    message: { text: bootstrap, truncated: false, chars: bootstrap.length }
+  });
+  const deltaUser = 'the package smoke exposed one runtime mismatch. fix only that seam and rerun the affected checks';
+  const deltaAssistant = 'The mismatch is reproduced and the affected file is identified, but the patch is not applied yet.';
+  await appendEvent(session.id, {
+    time: 3_500,
+    source: 'extension',
+    kind: 'user_message',
+    messageId: 'semantic-delta-user',
+    message: { text: deltaUser, truncated: false, chars: deltaUser.length }
+  });
+  await appendEvent(session.id, {
+    time: 4_000,
+    source: 'extension',
+    kind: 'assistant_message',
+    messageId: 'semantic-delta-assistant',
+    final: true,
+    message: { text: deltaAssistant, truncated: false, chars: deltaAssistant.length }
+  });
+
+  const transcript = await goal.conversationMessages(session.id);
+  expect(transcript).toEqual([
+    { role: 'user', content: bootstrap },
+    { role: 'user', content: deltaUser },
+    { role: 'assistant', content: deltaAssistant }
+  ]);
+  expect(transcript.some((message) => message.content === original)).toBe(false);
+  expect(transcript.some((message) => message.content === discardedExploration)).toBe(false);
+  expect(transcript[0]!.content).toContain('RICH_EVIDENCE_START');
+  expect(transcript[0]!.content).toContain('RICH_EVIDENCE_END');
+  expect(transcript[0]!.content).not.toContain('working set clipped for Goal transport');
+
+  let requestMessages: Array<{ role: string; content: string }> = [];
+  globalThis.fetch = (async (_url: string, init: RequestInit) => {
+    requestMessages = (JSON.parse(String(init.body)) as { messages: typeof requestMessages }).messages;
+    return Response.json({ choices: [{ message: { content: JSON.stringify({ action: 'continue', reply: 'fix that exact runtime seam and rerun the affected checks' }) } }] });
+  }) as never;
+
+  goal.startGoalDraft({ sessionId: session.id, conversationId: to, turnId: 'semantic-goal-delta' });
+  expect((await settled(to)).stage).toBe('ready');
+  const system = requestMessages.filter((message) => message.role === 'system').map((message) => message.content).join('\n');
+  expect(system).toContain('resolved semantic working state');
+  const providerTranscript = requestMessages.filter((message) => message.role !== 'system');
+  expect(providerTranscript).toEqual(transcript);
+});
+
+it('clips an oversized semantic working set around contract and executable tail instead of restoring old history', async () => {
+  const from = '33333333-cccc-4333-8333-cccccccccccc';
+  const to = '44444444-dddd-4444-8444-dddddddddddd';
+  const session = await createSession({ title: 'oversized semantic resume', conversationId: from });
+  const original = 'OLD DISCOVERY THAT MUST NOT RETURN AFTER THE SEMANTIC CHECKPOINT';
+  const workingSet = [
+    WORKING_SET_MARKER,
+    '',
+    'OBJECTIVE',
+    'OBJECTIVE_KEEP: finish the selected implementation without rediscovering the discarded alternatives.',
+    '',
+    'USER CONTRACT',
+    'CONTRACT_KEEP: preserve the chosen boundary and the user corrections already resolved.',
+    '',
+    'RESOLVED REASONING',
+    'REASONING_KEEP: the ownership mechanism is settled. ' + 'r'.repeat(34_000),
+    '',
+    'CURRENT STATE',
+    'CURRENT_STATE_MIDDLE ' + 's'.repeat(14_000),
+    '',
+    'IMPLEMENTATION MAP',
+    'src/main/goal.ts and src/main/session/handoff.ts own the seam.',
+    '',
+    'EVIDENCE',
+    'Focused semantic regression is green.',
+    '',
+    'REMAINING WORK',
+    'REMAINING_KEEP: package the candidate and prove runtime behavior.',
+    '',
+    'NEXT ACTION',
+    'NEXT_KEEP: run the affected package smoke, then install the exact SHA.',
+    '',
+    'EVIDENCE INDEX',
+    'INDEX_KEEP: test/goal-resume-handoff.test.ts; src/main/goal.ts::conversationMessages.',
+    '',
+    'DO NOT REDO',
+    'DO_NOT_REDO_KEEP: do not rescan the rejected architecture alternatives.'
+  ].join('\n');
+  expect(workingSet.length).toBeGreaterThan(48_000);
+  expect(workingSet.length).toBeLessThan(80_000);
+
+  await appendEvent(session.id, {
+    time: 1_000, source: 'extension', kind: 'user_message', messageId: 'oversized-old',
+    message: { text: original, truncated: false, chars: original.length }
+  });
+  const handoff = await prepareHandoff({ sessionId: session.id, text: workingSet, sourceTokens: 100_000 });
+  await appendEvent(session.id, {
+    time: 2_000, source: 'app', kind: 'handoff', handoffId: handoff.id, chars: handoff.text.length, reason: 'compact and resume'
+  });
+  expect(await rebindSession(session.id, from, to, handoff.id)).toBe(true);
+  const bootstrap = resumeBootstrapText(handoff.text);
+  await appendEvent(session.id, {
+    time: 2_500, source: 'extension', kind: 'user_message', messageId: 'oversized-bootstrap',
+    message: { text: bootstrap, truncated: false, chars: bootstrap.length }
+  });
+  const delta = 'new runtime evidence after resume';
+  await appendEvent(session.id, {
+    time: 3_000, source: 'extension', kind: 'assistant_message', messageId: 'oversized-delta',
+    final: true, message: { text: delta, truncated: false, chars: delta.length }
+  });
+
+  const transcript = await goal.conversationMessages(session.id);
+  expect(transcript).toHaveLength(2);
+  expect(transcript[0]!.content.length).toBeLessThanOrEqual(48_000);
+  expect(transcript[0]!.content).toContain('OBJECTIVE_KEEP');
+  expect(transcript[0]!.content).toContain('CONTRACT_KEEP');
+  expect(transcript[0]!.content).toContain('NEXT_KEEP');
+  expect(transcript[0]!.content).toContain('INDEX_KEEP');
+  expect(transcript[0]!.content).toContain('DO_NOT_REDO_KEEP');
+  expect(transcript[0]!.content).toContain('working set clipped for Goal transport');
+  expect(transcript[0]!.content).not.toContain(original);
+  expect(transcript[1]).toEqual({ role: 'assistant', content: delta });
 });
 
 it('anchors the last committed resume, never a later captured handoff whose continuation aborted', async () => {

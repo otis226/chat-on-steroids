@@ -76,6 +76,7 @@ const {
 } = await import('../src/main/session/continuation.js');
 const { RESUME_CLAIM_WINDOW_MS, resumeOpeningChat } = await import('../src/main/session/resume-gate.js');
 const { briefShortfall, resumeBootstrapText } = await import('../src/main/session/handoff.js');
+const { WORKING_SET_MARKER } = await import('../src/main/session/handoff-prompt.js');
 const { createSession, getSession, initSessionStore, resetSessionStoreForTests, sessionsRoot } = await import(
   '../src/main/session/store.js'
 );
@@ -1056,6 +1057,37 @@ describe('a brief that cannot be the whole handoff', () => {
 
   it('accepts a real one', () => {
     expect(briefShortfall(SAMPLE_BRIEF, 318_422)).toBeNull();
+  });
+
+  it('requires every semantic working-set section once the new marker is present', () => {
+    const partial = [
+      WORKING_SET_MARKER,
+      '',
+      'OBJECTIVE',
+      'Finish the exact current job.',
+      '',
+      'USER CONTRACT',
+      'Keep the current architecture and do not widen scope.'
+    ].join('\n');
+    expect(briefShortfall(partial.padEnd(1_200, 'x'), 50_000)).toMatch(/RESOLVED REASONING/);
+  });
+
+  it('accepts a complete semantic working set and bounds its transfer size', () => {
+    const sections = [
+      ['OBJECTIVE', 'Finish the exact current job.'],
+      ['USER CONTRACT', 'Keep the current architecture and preserve user corrections.'],
+      ['RESOLVED REASONING', 'The root cause and chosen repair are already established.'],
+      ['CURRENT STATE', 'The candidate is in one clean worktree and verification is current.'],
+      ['IMPLEMENTATION MAP', 'src/main/example.ts owns the remaining boundary.'],
+      ['EVIDENCE', 'Focused regression is green; runtime smoke is still pending.'],
+      ['REMAINING WORK', 'Package and run the exact runtime smoke.'],
+      ['NEXT ACTION', 'Run npm test for the affected slice, then package the same SHA.'],
+      ['EVIDENCE INDEX', 'test/example.test.ts; commit abc123.'],
+      ['DO NOT REDO', 'Do not repeat the rejected timeout-only workaround.']
+    ];
+    const complete = [WORKING_SET_MARKER, '', ...sections.flatMap(([heading, body]) => [heading, body, ''])].join('\n');
+    expect(briefShortfall(complete, 1_000)).toBeNull();
+    expect(briefShortfall(complete + 'z'.repeat(80_000), 1_000)).toMatch(/too large to transfer safely/i);
   });
 });
 

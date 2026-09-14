@@ -49,6 +49,24 @@ it('does not create a helper for verification-only work after a prior click', as
   expect(create).not.toHaveBeenCalled();
 });
 
+it('adopts an explicitly opened marked helper after the previously owned tab was closed', async () => {
+  const id = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const replacement = { id: 9, url: `https://chatgpt.com/?cos-plugin-refresh=${id}#settings/Plugins/plugin_asdk_app_synthetic`, pinned: false };
+  const sent = vi.fn(async () => ({ ok: true }));
+  const saved: Record<string, unknown> = { pluginRefreshOwner: { id, tab: 8 } };
+  const create = vi.fn();
+  const context = vm.createContext({ URL, setTimeout, clearTimeout, CHATGPT_TAB_URLS: ['https://chatgpt.com/*'], createChatTab: create,
+    call: async () => ({ ok: true, data: { requests: [{ id, appId: 'asdk_app_synthetic', verificationOnly: true }] } }),
+    chrome: { storage: { session: { get: async () => saved, set: async (next: object) => { Object.assign(saved, next); } } },
+      tabs: { query: async () => [replacement], get: async (tabId: number) => { if (tabId === 8) throw Error('closed'); return replacement; }, sendMessage: sent } } });
+  vm.runInContext(`${workflow}\nglobalThis.run = inspectRequestedPluginRefresh;`, context);
+  await context.run([{}], true);
+  expect(create).not.toHaveBeenCalled();
+  expect(sent).toHaveBeenCalledExactlyOnceWith(9, { type: 'clf-plugin-refresh',
+    request: { id, appId: 'asdk_app_synthetic', verificationOnly: true } });
+  expect(saved.pluginRefreshOwner).toEqual({ id, tab: 9 });
+});
+
 it('records browser creation failure before claim and retries the same obligation', async () => {
   const request = { id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', appId: 'asdk_app_synthetic' };
   const call = vi.fn(async (_path: string, init: { body: string }) => JSON.parse(init.body).action === 'pending'

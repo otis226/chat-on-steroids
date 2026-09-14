@@ -2056,10 +2056,14 @@ function inspectRequestedPluginRefresh(publications, background, browserOnly = f
     const owner = saved && typeof saved.id === 'string' && Number.isInteger(saved.tab) ? saved : null;
     // A provider SPA transition strips our query. The operation still owns the same
     // tab: preserve that identity across MV3 suspension before inspecting its URL.
+    let closedOwner = false;
     if (owner && requests.some(request => request.id === owner.id)) {
       const current = await chrome.tabs.get(owner.tab).catch(() => null);
-      if (!current) return; // A user-closed helper is not permission to reopen it every poll.
-      if (pluginRefreshMarker(current) !== owner.id) {
+      // Closing an app-owned helper must not make maintenance recreate it every poll.
+      // It also must not permanently fence a later explicitly opened marked helper:
+      // keep scanning the live tab set so that replacement can adopt the same request.
+      if (!current) closedOwner = true;
+      else if (pluginRefreshMarker(current) !== owner.id) {
         const url = new URL(current.pendingUrl || current.url || '');
         if (url.origin !== 'https://chatgpt.com' || url.pathname !== '/' || !/^#settings\/Plugins(?:\/plugin_asdk_app_[a-zA-Z0-9_-]+)?$/.test(url.hash)) return;
         url.searchParams.set('cos-plugin-refresh', owner.id);
@@ -2082,7 +2086,7 @@ function inspectRequestedPluginRefresh(publications, background, browserOnly = f
     if (!held) {
       // An earlier click is never retried automatically. A verification-only request
       // may inspect an explicitly opened marked helper, but it cannot create one itself.
-      if (browserOnly || request.verificationOnly === true) return;
+      if (closedOwner || browserOnly || request.verificationOnly === true) return;
       try {
         const tab = await createChatTab(`https://chatgpt.com/?cos-plugin-refresh=${request.id}#settings/Plugins${request.appId ? `/plugin_${request.appId}` : ''}`, background);
         await chrome.storage.session.set({ pluginRefreshOwner: { id: request.id, tab: tab.id } });

@@ -1137,6 +1137,7 @@ describe('capability gating', () => {
       (tool) => tool.name === 'agents'
     )?.description;
     expect(agentsDescription).toContain('Reuse a suitable sleeping worker with message before spawn');
+    expect(agentsDescription).toContain('never poll status for progress');
   });
 
   it('rejects action-specific agent fields instead of silently ignoring them', async () => {

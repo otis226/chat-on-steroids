@@ -97,6 +97,19 @@ describe('the user’s own connector instructions', () => {
     expect(withoutCommands).not.toContain('exec_command runs');
   });
 
+  it('instructs prime and workers on worker-first delegation, event-driven no-poll, and rate-limit backpressure', () => {
+    const text = serverInstructions({ ...ctx, agentTools: true }, 'core', 'win32');
+    expect(text).toContain('The prime ChatGPT acts primarily as the accountable architect, planner and integrator');
+    expect(text).toContain('not step-by-step CI execution');
+    expect(text).toContain('Delegate coherent long semantic coding, build and test jobs to one bounded worker that owns implementation through verification and reports once');
+    expect(text).toContain('Worker replies, progress and completions are event-driven');
+    expect(text).toContain('never poll worker status or worker sessions merely for progress');
+    expect(text).toContain('without intermediate progress chatter unless blocked or steered');
+    expect(text).toContain('Never use workers, extra chats, sessions or account fan-out to bypass provider rate limits');
+    expect(text).toContain('treat an actual 429 or provider usage limit as backpressure');
+    expect(text).toContain('Never introduce artificial sleeps or backoff merely to reduce request count');
+  });
+
   it('adds nothing at all when empty, not even the heading', () => {
     expect(defaultConfig().mcp.instructions).toBe('');
     for (const surface of ['core', 'desktop'] as const) {

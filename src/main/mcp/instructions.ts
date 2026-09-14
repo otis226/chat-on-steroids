@@ -114,11 +114,13 @@ function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform): string {
   if (agentTools) lines.push(
     '',
     '# Workers',
-    'Use agents for independent subtasks while continuing useful work yourself. Reuse a sleeping worker for related follow-up work before spawning a replacement. Only terminal workers whose context is full need replacing.',
+    'The prime ChatGPT acts primarily as the accountable architect, planner and integrator: own central read/analysis, shared contracts, coordination and final integration verification, not step-by-step CI execution. Delegate coherent long semantic coding, build and test jobs to one bounded worker that owns implementation through verification and reports once when useful work is complete.',
+    'Worker replies, progress and completions are event-driven and arrive automatically on later tool results: never poll worker status or worker sessions merely for progress. Short deterministic verification remains supported in the prime; batch related checks with exec_command cmds. Use write_stdin wait_for="exit" for long non-interactive builds/tests.',
+    'Reuse a sleeping worker for related follow-up work before spawning a replacement. Only terminal workers whose context is full need replacing.',
     'When spawning workers, omit model and reasoning_effort unless the user explicitly requests an override for that setting. The app applies the user\'s saved worker defaults automatically; you do not need their concrete values and must not ask the user to choose or confirm them before spawning.',
     'A worker sees only what you send it. In spawn, put shared repository/folder instructions, constraints and validation requirements in context once; put the objective and assigned files in each task. Explicitly say what each worker may change. Do not repeat the shared context in every task.',
-    'Use action=message to steer a worker; batch messages when sending several. Worker reports arrive with tool results. Check their findings and changes before relying on them.',
-    'Workers communicate with the prime, keep working while replies are pending, and use action=finish when done with RESULT / CHANGES / VALIDATION / BLOCKERS. A finished reusable worker sleeps and can be messaged again.'
+    'Use action=message to steer a worker; batch messages when sending several. Workers communicate with the prime, keep working while replies are pending, own their delegated slice through verification, and use action=finish once when done with RESULT / CHANGES / VALIDATION / BLOCKERS without intermediate progress chatter unless blocked or steered. A finished reusable worker sleeps and can be messaged again.',
+    'Never use workers, extra chats, sessions or account fan-out to bypass provider rate limits or usage restrictions; treat an actual 429 or provider usage limit as backpressure. Never introduce artificial sleeps or backoff merely to reduce request count.'
   );
   if (ctx.exposedFinishTool ?? config.ui.finishTool) lines.push(
     '',

@@ -1154,7 +1154,17 @@ it must not guess a new rebind, delete history or become the path for new contin
 
 **Intent:** each prime can delegate bounded work to its own reusable workers while several
 independent user tasks run at once. Inside a family the topology is a star: workers report to
-their prime and cannot create worker descendants.
+their prime and cannot create worker descendants. The prime acts primarily as the accountable
+architect, planner and integrator (central read/analysis, shared contracts, coordination and
+final integration verification), not a step-by-step CI runner. Coherent long semantic coding,
+build and test jobs are delegated to one bounded worker that owns implementation through
+verification and reports once when useful work is complete. Worker progress, replies and
+completions are event-driven and arrive automatically on later tool results; never poll worker
+status or worker sessions merely for progress. Short deterministic owner verification remains
+supported in the prime; batch related checks with `exec_command cmds`. Workers, sessions,
+extra chats or fan-out are never recommended or used as a workaround to bypass provider
+rate limits or usage restrictions; an actual 429 or provider usage limit is treated as real
+backpressure. No artificial sleeps or backoff are introduced merely to reduce request count.
 
 `agents.ts` is the one broker. Its run map and v6 `activeRuns` snapshot hold independent families;
 `maxWorkers` applies **per family**, not to one global active run. Display names such as

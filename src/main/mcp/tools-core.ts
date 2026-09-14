@@ -1142,7 +1142,7 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
       description:
         'Run ChatGPT workers. Omit model and reasoning_effort unless the user explicitly requests an override; app settings supply their defaults automatically. Do not ask the user to choose these settings before spawning. Reuse a suitable sleeping worker with message before spawn; spawn creates fresh worker chats for new parallel work. Sleeping/terminal workers stay in this prime conversation’s durable history. ' +
         'message: prime→worker or worker→prime; messaging a sleeping worker revives that exact existing chat when a slot is free. Replies arrive on later tool results, so never poll. ' +
-        'status shows this prime’s full worker history, including sleeping/revivable and terminal/non-revivable workers, even while no run is active. finish reports a worker result and normally puts it to sleep.',
+        'status shows this prime’s full worker history; replies arrive on tool results, so never poll status for progress. finish reports a worker result and normally puts it to sleep.',
       inputSchema: z.object({
         action: z.enum(['spawn', 'message', 'status', 'finish']).describe('What to do.'),
         context: z
@@ -1484,7 +1484,7 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
                   )
                   .join('\n') +
                 (recordings.size > 0
-                  ? '\n\nTo see what a worker is doing, session action=read with its recording id; pass the update_cursor from that read next time to get only what is new.'
+                  ? '\n\nWorker progress is event-driven: replies and finish reports arrive automatically on tool results. Do not poll status or worker sessions merely for progress. If investigating a failure or diagnosing a blocked worker, use session action=read with its recording id.'
                   : '') +
                 (me.id === PRIME_ID
                   ? `\n\n${slots} of your worker slots ${slots === 1 ? 'is' : 'are'} free.` +
@@ -1504,7 +1504,7 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
                 // A status check is a glance, not a stopping point. Without this the table reads
                 // like an answer to hand back to the user, and a prime that has just looked at its
                 // workers stops mid-run to report what it saw.
-                '\n\nThis is the current stats, keep working.'
+                '\n\nThis is the current status; continue your own work without polling.'
             }
           ],
           structuredContent: {

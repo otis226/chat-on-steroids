@@ -2897,6 +2897,9 @@ describe('through the MCP endpoint', () => {
     expect(status).toContain('worker-1  worker  sleeping (reusable; wake with action=message)');
     expect(status).toContain('REUSE FIRST: worker-1');
     expect(status).toContain('For related follow-up work, do this before action=spawn');
+    expect(status).toContain('Worker progress is event-driven');
+    expect(status).toContain('continue your own work without polling');
+    expect(status).not.toContain('To see what a worker is doing, session action=read');
 
     // With the last worker asleep the whole limit is free, and the singular reads correctly.
     await asChat('c-worker-2', 'finish', { result: 'second half done' });

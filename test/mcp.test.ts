@@ -1136,8 +1136,14 @@ describe('capability gating', () => {
     const agentsDescription = (tools.body.result.tools as Array<{ name: string; description?: string }>).find(
       (tool) => tool.name === 'agents'
     )?.description;
-    expect(agentsDescription).toContain('Reuse a suitable sleeping worker with message before spawn');
-    expect(agentsDescription).toContain('never poll status for progress');
+    expect(agentsDescription).toContain('Reuse a sleeping worker with message before spawn');
+    expect(agentsDescription).toContain('Prime plans/integrates');
+    expect(agentsDescription).toContain('one bounded worker through verification');
+    expect(agentsDescription).toContain('batch exec_command cmds');
+    expect(agentsDescription).toContain('never poll status/sessions');
+    expect(agentsDescription).toContain('Never use workers/chats/sessions/account fan-out to bypass provider limits');
+    expect(agentsDescription).toContain('429/usage caps are backpressure');
+    expect(agentsDescription).toContain('Never add waits merely to reduce requests');
   });
 
   it('rejects action-specific agent fields instead of silently ignoring them', async () => {

@@ -1140,9 +1140,7 @@ function registerAgentsTool(reg: SurfaceRegistrar): void {
     toolDeclaration('agents', () => ({
       title: 'Multi-agent run',
       description:
-        'Run ChatGPT workers. Omit model and reasoning_effort unless the user explicitly requests an override; app settings supply their defaults automatically. Do not ask the user to choose these settings before spawning. Reuse a suitable sleeping worker with message before spawn; spawn creates fresh worker chats for new parallel work. Sleeping/terminal workers stay in this prime conversation’s durable history. ' +
-        'message: prime→worker or worker→prime; messaging a sleeping worker revives that exact existing chat when a slot is free. Replies arrive on later tool results, so never poll. ' +
-        'status shows this prime’s full worker history; replies arrive on tool results, so never poll status for progress. finish reports a worker result and normally puts it to sleep.',
+        'Run ChatGPT workers. Prime plans/integrates; delegate coherent long coding/build/test work to one bounded worker through verification. Keep short owner checks local; batch exec_command cmds. Omit model/reasoning_effort unless user explicitly overrides; saved defaults apply. Reuse a sleeping worker with message before spawn. Replies arrive on later tool results; never poll status/sessions for progress. Never use workers/chats/sessions/account fan-out to bypass provider limits; 429/usage caps are backpressure. Never add waits merely to reduce requests. finish reports result and normally sleeps the worker.',
       inputSchema: z.object({
         action: z.enum(['spawn', 'message', 'status', 'finish']).describe('What to do.'),
         context: z

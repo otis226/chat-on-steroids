@@ -2127,11 +2127,18 @@ var CLF_DOM = (() => {
     return /^\/g\/(g-p-[0-9a-f]{32})(?:-[^/]+)?\/project\/?$/i.exec(pathname)?.[1]?.toLowerCase() || null;
   }
 
+  function projectChatIdentity(pathname) {
+    return safe(() => {
+      const match = /^\/g\/(g-p-[0-9a-f]{32})(?:-[^/]*)?\/c\/([0-9a-f-]{8,64})(?:\/|$)/i.exec(String(pathname || ''));
+      return match ? { project: match[1].toLowerCase(), conversation: match[2].toLowerCase() } : null;
+    }, null);
+  }
+
   /** Enter a Project through its source chat's native link. Cold /project loads can error. */
   async function enterProject(entry, stillCurrent = () => true) {
     if (!entry || !/^g-p-[0-9a-f]{32}$/.test(entry.id) || conversationId() !== entry.sourceConversationId) return false;
     return new Promise(resolve => {
-      let clicked = false, done = false, sourceComposer = null;
+      let clicked = false, done = false, sourceComposer = null, sidebarOpened = false;
       const interrupt = event => { if (event.isTrusted) finish(false); };
       const finish = result => {
         if (done) return;
@@ -2178,7 +2185,50 @@ var CLF_DOM = (() => {
           const rank = link => link.closest('header,[role="banner"]') ? 0 : link.closest('nav,aside,[role="navigation"]') ? 1 : 2;
           return rank(left) - rank(right);
         });
-        if (!links.length) return;
+        let control = links[0] || null;
+
+        // The live 2026-09-14 sidebar no longer exposes Project home as an anchor at all. The
+        // Project row contains a button named "Open project home" beside its nested conversation
+        // links. Bind such a button to authority only when the same nearest provider row proves
+        // this exact Project id *and* source conversation through its native chat href. This is
+        // deliberately stricter than selecting a button by display name or row order: authored
+        // chat content and another Project's identically-labelled button cannot satisfy it.
+        if (!control) {
+          const buttons = new Set();
+          for (const sourceLink of [...document.querySelectorAll('a[href]')]) {
+            if (sourceLink.closest(OWN_SURFACES) || sourceLink.closest(TURN) || sourceLink.closest('[hidden],[aria-hidden="true"],[inert]')) continue;
+            let identity = null;
+            try {
+              const url = new URL(sourceLink.href, location.href);
+              if (url.origin === location.origin) identity = projectChatIdentity(url.pathname);
+            } catch { /* malformed provider link */ }
+            if (identity?.project !== entry.id || identity?.conversation !== entry.sourceConversationId.toLowerCase()) continue;
+            for (let row = sourceLink.parentElement, depth = 0; row && depth < 8; row = row.parentElement, depth++) {
+              const homes = [...row.querySelectorAll('button,[role="button"]')].filter(button => {
+                if (button.closest(OWN_SURFACES) || button.closest('[hidden],[aria-hidden="true"],[inert]')) return false;
+                const label = [button.getAttribute('aria-label'), button.getAttribute('title'), button.textContent]
+                  .filter(value => typeof value === 'string')
+                  .map(value => value.trim().replace(/\s+/g, ' ').toLowerCase());
+                return label.includes('open project home');
+              });
+              if (homes.length === 1) { buttons.add(homes[0]); break; }
+              if (homes.length > 1) break;
+            }
+          }
+          control = [...buttons][0] || null;
+        }
+
+        if (!control) {
+          if (!sidebarOpened) {
+            const toggles = [...document.querySelectorAll('button[data-testid="open-sidebar-button"][aria-expanded="false"][aria-controls]')]
+              .filter(button => !button.closest(OWN_SURFACES) && !button.closest('[hidden],[aria-hidden="true"],[inert]'));
+            if (toggles.length === 1 && !toggles[0].disabled) {
+              sidebarOpened = true;
+              toggles[0].click();
+            }
+          }
+          return;
+        }
         sourceComposer = source;
         clicked = true;
         // Loading the source and following its link are separate page transitions.
@@ -2186,7 +2236,7 @@ var CLF_DOM = (() => {
         // for observing the replacement editor after the one permitted click.
         clearTimeout(timer);
         timer = setTimeout(() => finish(false), 12_000);
-        links[0].click();
+        control.click();
         check();
       };
       const observer = new MutationObserver(check);

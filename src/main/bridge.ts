@@ -542,6 +542,22 @@ let requestWindow = { start: Date.now(), count: 0 };
 const listeners = new Set<() => void>();
 let extensionVersion: string | null = null;
 let versionWarned = false;
+/**
+ * Serializes pairing credential mutations.
+ *
+ * /pair is intentionally reachable from an approved extension origin without already owning
+ * a token. That makes it a recovery endpoint, so rotating the credential on every call is
+ * unsafe: a second extension context, popup retry, or local smoke can invalidate the token the
+ * real service worker is using mid-request. One process-wide lane makes ordinary provisioning
+ * idempotent and gives app-side Disconnect a deterministic order against any in-flight pair.
+ */
+let pairingState: Promise<void> = Promise.resolve();
+
+function withPairingState<T>(work: () => Promise<T>): Promise<T> {
+  const result = pairingState.then(work, work);
+  pairingState = result.then(() => undefined, () => undefined);
+  return result;
+}
 
 export function onBridgeChange(listener: () => void): () => void {
   listeners.add(listener);
@@ -603,14 +619,16 @@ function noteBrowserSeen(): boolean {
  * rather than a setup: there is nothing to press to connect.
  */
 export async function unpair(): Promise<void> {
-  // Clearing the credential is ambiguous: it is also what a fresh install or repaired
-  // secrets store looks like, and those are intentionally allowed to provision silently.
-  // This impossible-as-a-token sentinel preserves the user's explicit intent across both
-  // the extension's next poll and an app restart.
-  await setSecret('bridgeToken', BROWSER_DISCONNECTED);
-  browserWake?.revoke();
-  logInfo('bridge: browser disconnected');
-  changed();
+  await withPairingState(async () => {
+    // Clearing the credential is ambiguous: it is also what a fresh install or repaired
+    // secrets store looks like, and those are intentionally allowed to provision silently.
+    // This impossible-as-a-token sentinel preserves the user's explicit intent across both
+    // the extension's next poll and an app restart.
+    await setSecret('bridgeToken', BROWSER_DISCONNECTED);
+    browserWake?.revoke();
+    logInfo('bridge: browser disconnected');
+    changed();
+  });
 }
 
 // ------------------------------------------------------------------ helpers
@@ -1365,37 +1383,46 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       return json(res, 400, { error: 'bad_request' }, origin);
     }
     const reconnect = Boolean(body && typeof body === 'object' && !Array.isArray(body) && (body as Record<string, unknown>)['reconnect'] === true);
-    if ((await browserDisconnected()) && !reconnect) {
-      return json(res, 409, { error: 'browser_disconnected' }, origin);
-    }
-    const storage = await secureStorageStatus();
-    if (!storage.available) {
-      return json(
-        res,
-        503,
-        { error: 'secure_storage_unavailable', message: storage.detail ?? 'Secure credential storage is unavailable.' },
-        origin
-      );
-    }
-    // Silent provisioning on loopback.
-    //
-    // There used to be a six-digit code here, so the user had to be looking at the app
-    // before a browser could attach. In practice both halves are the same person on the
-    // same machine, installed together, and the code was a step that failed far more
-    // often than it protected anything — the app was unreachable and the user was typing
-    // numbers. The bearer token is still real and still required on every other route; it
-    // is simply issued to whoever asks on 127.0.0.1 rather than to whoever can read the
-    // window. What that gives up is stated plainly: any program already running as this
-    // user can obtain the token, and with it read recorded ChatGPT activity and queue an
-    // "open a fresh chat" command. It can still not read a file, run anything, or change
-    // a permission — the bridge has no route that does. A web page cannot: originOf
-    // refuses anything that is not a chrome-extension:// origin, above.
-    const token = randomBytes(32).toString('base64url');
-    await setSecret('bridgeToken', token);
+    const paired = await withPairingState(async () => {
+      const stored = await getSecret('bridgeToken');
+      if (stored === BROWSER_DISCONNECTED && !reconnect) {
+        return { status: 409, body: { error: 'browser_disconnected' } } as const;
+      }
+      const storage = await secureStorageStatus();
+      if (!storage.available) {
+        return {
+          status: 503,
+          body: { error: 'secure_storage_unavailable', message: storage.detail ?? 'Secure credential storage is unavailable.' }
+        } as const;
+      }
+      // Ordinary provisioning is idempotent. A second caller must not revoke the credential
+      // already in use by the real browser service worker. This also closes the cross-context
+      // race that extension-side singleflight cannot see.
+      if (stored && stored !== BROWSER_DISCONNECTED) {
+        return { status: 200, body: { token: stored }, reused: true } as const;
+      }
+      // Silent provisioning on loopback.
+      //
+      // There used to be a six-digit code here, so the user had to be looking at the app
+      // before a browser could attach. In practice both halves are the same person on the
+      // same machine, installed together, and the code was a step that failed far more
+      // often than it protected anything — the app was unreachable and the user was typing
+      // numbers. The bearer token is still real and still required on every other route; it
+      // is simply issued to whoever asks on 127.0.0.1 rather than to whoever can read the
+      // window. What that gives up is stated plainly: any program already running as this
+      // user can obtain the token, and with it read recorded ChatGPT activity and queue an
+      // "open a fresh chat" command. It can still not read a file, run anything, or change
+      // a permission — the bridge has no route that does. A web page cannot: originOf
+      // refuses anything that is not a chrome-extension:// origin, above.
+      const token = randomBytes(32).toString('base64url');
+      await setSecret('bridgeToken', token);
+      return { status: 200, body: { token }, reused: false } as const;
+    });
+    if (paired.status !== 200) return json(res, paired.status, paired.body, origin);
     noteBrowserSeen();
-    logInfo('bridge: browser extension connected and provisioned');
+    logInfo(paired.reused ? 'bridge: browser extension connected using existing pairing' : 'bridge: browser extension connected and provisioned');
     changed();
-    return json(res, 200, { token }, origin);
+    return json(res, 200, paired.body, origin);
   }
 
   // A deliberate revocation is different from a stale credential. The extension repairs a
@@ -7842,6 +7869,7 @@ export function resetBridgeForTests(): void {
   lastSeenAt = null;
   extensionVersion = null;
   versionWarned = false;
+  pairingState = Promise.resolve();
   requestWindow = { start: Date.now(), count: 0 };
 }
 

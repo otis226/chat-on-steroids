@@ -117,10 +117,10 @@ let connectionEpoch = 0;
 /**
  * The `/pair` in flight, shared by everything that wants a token.
  *
- * Several tabs coming back at once all find no token and all call `/pair`. Each call
- * mints a fresh credential and invalidates the one before it, so the tabs rotate each
- * other's tokens: every request 401s, drops its token, and provisions again. One promise
- * means one credential no matter how many callers arrive together.
+ * The app now makes ordinary provisioning idempotent, so another approved extension context
+ * cannot revoke this worker's live token. Keep the client-side singleflight anyway: it avoids
+ * redundant recovery traffic, remains compatible with older peers, and preserves one result
+ * for one connection-intent generation.
  */
 let pairing = null;
 let pairingEpoch = -1;
@@ -1103,9 +1103,9 @@ async function call(path, init = {}, retried = false) {
  * by accident, and it is why the marker in a chat URL is harmless on its own.
  */
 function provision(reconnect = false) {
-  // Singleflight. Everything that wants a token waits on the same request: `/pair` mints
-  // a fresh credential and invalidates the one before it, so two concurrent callers do
-  // not get two tokens, they get one working token and one that has already been revoked.
+  // Singleflight. Everything that wants a token waits on the same request. Current apps reuse
+  // an existing credential, but keeping this fence avoids redundant recovery calls and remains
+  // safe against older peers whose `/pair` semantics rotated credentials.
   // A pairing from an *older* connection intent is deliberately not shared: Disconnect may
   // have happened while it was in flight, and a later explicit Connect must be able to mint
   // under the new intent without waiting for/accepting that stale result.

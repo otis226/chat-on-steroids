@@ -3320,11 +3320,10 @@ describe('extension connection', () => {
   }
 
   /**
-   * `/pair` mints a fresh credential and invalidates the one before it, so two callers
-   * arriving together do not get two tokens — they get one working token and one that
-   * has already been revoked, and then each 401 provisions again.
+   * Client-side singleflight remains part of the extension contract even though current apps
+   * make ordinary `/pair` idempotent: one worker should still issue one recovery request.
    */
-  it('mints one token however many callers ask at once', async () => {
+  it('sends one pairing request however many callers ask at once', async () => {
     const server = app();
     const worker = loadWorker({ local: new FakeStorageArea(), session: new FakeStorageArea(), fetch: server.fetch });
 

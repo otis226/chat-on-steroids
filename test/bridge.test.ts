@@ -506,12 +506,26 @@ describe('provisioning', () => {
     expect((await request('GET', '/hello', { auth: null })).body.paired).toBe(false);
   });
 
-  it('replaces the token on a second request, so a re-provision supersedes the old one', async () => {
+  it('reuses the existing token on ordinary re-provision instead of disconnecting the live browser', async () => {
     const first = await pair();
     const second = await pair();
-    expect(second).not.toBe(first);
-    expect((await request('GET', '/status', { auth: first })).status).toBe(401);
+    expect(second).toBe(first);
+    expect((await request('GET', '/status', { auth: first })).status).toBe(200);
     expect((await request('GET', '/status', { auth: second })).status).toBe(200);
+  });
+
+  it('serializes concurrent provisioning so every caller receives the same usable token', async () => {
+    const replies = await Promise.all([
+      request('POST', '/pair', { auth: null }),
+      request('POST', '/pair', { auth: null }),
+      request('POST', '/pair', { auth: null }),
+      request('POST', '/pair', { auth: null })
+    ]);
+    expect(replies.every((reply) => reply.status === 200)).toBe(true);
+    const tokens = replies.map((reply) => reply.body.token as string);
+    expect(new Set(tokens)).toEqual(new Set([tokens[0]]));
+    token = tokens[0]!;
+    expect((await request('GET', '/status')).status).toBe(200);
   });
 
   it('drops the token when the user disconnects the browser', async () => {
@@ -522,7 +536,7 @@ describe('provisioning', () => {
   });
 
   it('keeps an app-side disconnect latched until the browser explicitly reconnects', async () => {
-    await pair();
+    const first = await pair();
     await unpair();
     // Drop the decrypted in-process cache. The next bridge read now has to recover the
     // disconnect marker from the encrypted file, the relevant half of an app restart.
@@ -543,6 +557,7 @@ describe('provisioning', () => {
     const reconnect = await request('POST', '/pair', { auth: null, body: { reconnect: true } });
     expect(reconnect.status).toBe(200);
     token = reconnect.body.token as string;
+    expect(token).not.toBe(first);
     expect((await request('GET', '/status')).status).toBe(200);
     expect((await request('GET', '/hello', { auth: null })).body).toMatchObject({
       paired: true,

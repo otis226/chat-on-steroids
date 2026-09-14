@@ -247,22 +247,11 @@ async function execSession(tool: 'exec_command' | 'write_stdin'): Promise<string
 
 export function registerCoreTools(reg: SurfaceRegistrar): void {
   const { ctx, caps, exposedCaps } = reg;
-  // Named from the live roots, never from a `/project` that may not exist: a worked example the
-  // model cannot act on costs a refused call and a retry. What followed the root had the same
-  // problem and cost more of them. `/<root>/src/main.ts` is a project's shape, so it read as a
-  // promise that the root *is* the project — and an approved root is a folder somebody picked,
-  // routinely a parent holding several. Reading it that way turns every repo-relative path into
-  // `/<root>/AGENTS.md` for a file that lives a folder deeper, which was the single most
-  // repeated read failure in the recorded corpus. The relationship is the fact worth the bytes;
-  // the rest of the path the model already has, because it is the one it gives exec_command as
-  // `workdir`. No example is invented here, and the host path stays unsaid, so nothing in this
-  // sentence can be stale or unreachable.
-  const virtualRoots = ctx.roots.map((root) => `/${root.name}`);
+  // Keep the public tool declaration machine-stable. Exact live root names belong in the
+  // per-connection server instructions; embedding them here makes two otherwise identical Core
+  // connectors publish different tools/list schemas under the same ChatGPT plugin identity.
   const readPathDescription =
-    virtualRoots.length > 0
-      ? `Paths inside the live approved roots: ${virtualRoots.join(', ')}. A root is an approved folder, usually a parent of the project rather than the project itself, so name every folder between the root and the file — the same path exec_command takes as workdir. Reading a root lists it one level deep. ` +
-        'Absolute native paths copied from command output are also accepted when they resolve inside one of these roots; globs work in either spelling.'
-      : 'Paths require an approved virtual root in the form /<root>/...; no root is currently approved. Globs are supported after a root is approved.';
+    'Paths inside the approved roots named in the connector instructions. A root is an approved folder, usually a parent of the project rather than the project itself, so name every folder between the root and the file — the same path exec_command takes as workdir. Virtual paths use /<root>/... . Absolute native paths copied from command output are also accepted when they resolve inside an approved root; globs work in either spelling. Reading a root lists it one level deep.';
 
   // ------------------------------------------------------------------- read
 

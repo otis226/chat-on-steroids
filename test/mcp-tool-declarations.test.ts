@@ -65,23 +65,27 @@ it('keeps Zod input and output refinements through fresh SDK servers while shari
   } finally { await handler.close(); }
 });
 
-it('refreshes root-sensitive read descriptions without rebuilding unrelated declarations', async () => {
-  const ctx: ToolContext = { roots: [{ name: 'first', path: '/unused' }], caps: { ...DEFAULT_CAPABILITIES, read: true }, readOnly: false, sessionTools: false, agentTools: false, exposedFinishTool: false };
-  const declarations = async () => {
+it('keeps public Core declarations stable across machine roots while instructions retain exact roots', async () => {
+  const declarations = async (name: string, path: string) => {
+    const ctx: ToolContext = { roots: [{ name, path }], caps: { ...DEFAULT_CAPABILITIES, read: true }, readOnly: false, sessionTools: false, agentTools: false, exposedFinishTool: false };
     let tools: PluginToolSchema[] = [];
-    const server = buildServer(ctx, 'core', (_name, _version, _instructions, published) => { tools = published; });
+    let instructions = '';
+    const server = buildServer(ctx, 'core', (_name, _version, publishedInstructions, published) => {
+      instructions = publishedInstructions;
+      tools = published;
+    });
     await server.close();
-    return tools;
+    return { tools, instructions };
   };
-  const a = await declarations();
-  const b = await declarations();
-  const read = (tools: PluginToolSchema[]) => tools.find(tool => tool.name === 'read')!.inputSchema;
-  expect(read(a).properties).toBe(read(b).properties);
-  ctx.roots = [{ name: 'second', path: '/unused' }];
-  const c = await declarations();
-  expect(JSON.stringify(read(c))).toContain('/second');
-  expect(JSON.stringify(read(c))).not.toContain('/first');
-  expect(c.find(tool => tool.name === 'view_image')!.inputSchema.properties).toBe(a.find(tool => tool.name === 'view_image')!.inputSchema.properties);
+  const first = await declarations('first', '/unused-first');
+  const second = await declarations('second', '/unused-second');
+  expect(second.tools).toEqual(first.tools);
+  expect(JSON.stringify(first.tools)).not.toContain('/first');
+  expect(JSON.stringify(second.tools)).not.toContain('/second');
+  expect(first.instructions).toContain('/first');
+  expect(first.instructions).not.toContain('/second');
+  expect(second.instructions).toContain('/second');
+  expect(second.instructions).not.toContain('/first');
 });
 
 it('shares schemas without capturing the preceding request permission snapshot in handlers', async () => {

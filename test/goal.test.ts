@@ -1750,6 +1750,72 @@ describe('a chat driven towards a specific goal', () => {
     );
   });
 
+  it('retires a stable pending reply after newer turn activity but leaves provisional turn tickets alone', async () => {
+    const conversationId = 'c-reply-stale-after-new-turn';
+    const session = await createSession({ title: 'goal', conversationId });
+    await appendEvent(session.id, {
+      time: 1_000,
+      source: 'extension',
+      kind: 'user_message',
+      message: { text: 'finish this work', truncated: false, chars: 16 }
+    });
+    const final = await appendEvent(session.id, {
+      time: 1_100,
+      source: 'extension',
+      kind: 'assistant_message',
+      final: true,
+      state: 'final',
+      message: { text: 'this pass is complete', truncated: false, chars: 21 }
+    });
+    await goal.acceptGoalReplyNow({
+      conversationId,
+      sessionId: session.id,
+      replyId: 'assistant-stale-after-new-turn',
+      turnId: 'g-stale-after-new-turn',
+      eventSeq: final.seq,
+      blocked: false
+    });
+    expect(goal.goalPendingReplyFor(conversationId)).not.toBeNull();
+    await appendEvent(session.id, {
+      time: 1_200,
+      source: 'extension',
+      kind: 'turn_start',
+      turnId: 'g-newer-turn'
+    });
+
+    expect(await goal.retireStaleGoalReplyNow(conversationId)).toBe(true);
+    expect(goal.goalPendingReplyFor(conversationId)).toBeNull();
+    expect(goal.snapshotGoalReplies().replies).toContainEqual(
+      expect.objectContaining({ conversationId, replyId: 'assistant-stale-after-new-turn', state: 'handled' })
+    );
+
+    const provisionalId = 'c-reply-provisional-current-turn';
+    const provisionalSession = await createSession({ title: 'goal', conversationId: provisionalId });
+    await appendEvent(provisionalSession.id, {
+      time: 2_000,
+      source: 'extension',
+      kind: 'user_message',
+      message: { text: 'keep this current turn', truncated: false, chars: 22 }
+    });
+    await goal.acceptGoalReplyNow({
+      conversationId: provisionalId,
+      sessionId: provisionalSession.id,
+      replyId: 'turn:g-current-provisional',
+      turnId: 'g-current-provisional',
+      eventSeq: 0,
+      blocked: false
+    });
+    await appendEvent(provisionalSession.id, {
+      time: 2_100,
+      source: 'extension',
+      kind: 'turn_start',
+      turnId: 'g-current-provisional'
+    });
+
+    expect(await goal.retireStaleGoalReplyNow(provisionalId)).toBe(false);
+    expect(goal.goalPendingReplyFor(provisionalId)).toMatchObject({ turnId: 'g-current-provisional', eventSeq: 0 });
+  });
+
   it('durably cancels a pending ticket on Off and re-arms that stable final on On', async () => {
     const conversationId = 'c-reply-switch-rearm';
     await goal.acceptGoalReplyNow({

@@ -625,6 +625,55 @@ async function goalReplyMayRearm(reply: GoalReplyObligation): Promise<boolean> {
   return !newer.some(event => event.kind === 'tool_call' && event.time >= source.time);
 }
 
+/**
+ * Retires one persisted stable-final obligation once the source conversation has moved on.
+ *
+ * A pending row is crash recovery for one exact final reply, not permission to replay that reply
+ * forever. If a later authored turn/message exists, or a tool call happened after the source
+ * final, that old reply is historical and a replacement page/watchdog must never pick it up.
+ *
+ * Provisional turn rows and synthetic silence tickets are excluded: they have no stable source
+ * assistant event to compare yet and own separate lifecycle checks. Re-check identity after the
+ * async history read so a newer accepted final can never be retired by an older reconciliation.
+ */
+export async function retireStaleGoalReplyNow(conversationId: string): Promise<boolean> {
+  const reply = goalReplies.get(conversationId);
+  if (
+    !reply ||
+    reply.state !== 'pending' ||
+    reply.eventSeq <= 0 ||
+    reply.replyId.startsWith('turn:') ||
+    reply.replyId.startsWith('silence:')
+  ) {
+    return false;
+  }
+  if (await goalReplyMayRearm(reply)) return false;
+  if (goalReplies.get(conversationId) !== reply || reply.state !== 'pending') return false;
+
+  const draft = drafts.get(conversationId);
+  if (draft && draft.turnId === reply.turnId && !draft.acknowledged) {
+    draft.acknowledged = true;
+    draft.abort?.abort();
+    if (draft.settledAt === 0) draft.settledAt = Date.now();
+    draft.text = '';
+    draft.reply = '';
+  }
+  const previous = { ...reply };
+  reply.state = 'handled';
+  try {
+    await writeDurableNow(GOAL_REPLIES_STATE, snapshotGoalReplies());
+    notifyGoalChange();
+    return true;
+  } catch (error) {
+    // Do not roll an older row back over a newer final that won while the durable write awaited.
+    if (goalReplies.get(conversationId) === reply) {
+      goalReplies.set(conversationId, previous);
+      persistGoalRepliesSoon();
+    }
+    throw error;
+  }
+}
+
 /** Durable state file for per-chat Goal objectives. */
 export const GOAL_OBJECTIVES_STATE = 'goal-objectives';
 

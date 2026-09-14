@@ -93,6 +93,7 @@ const {
   goalSwitchFor,
   humanReply,
   resetGoalStateForTests,
+  restoreGoalReplies,
   setGoalObjective
 } = await import('../src/main/goal.js');
 const { createSession, deleteSession, findSessionByConversation, getSession, initSessionStore, readEvents, resetSessionStoreForTests } = await import(
@@ -8708,6 +8709,58 @@ describe('the goal loop over the bridge', () => {
     });
   });
 
+  it('durably retires a pending stable Goal reply when newer chat activity makes it historical', async () => {
+    await pair();
+    const chat = 'cafe0190-0000-4000-8000-000000000190';
+    const first = await request('POST', '/events', {
+      body: {
+        conversationId: chat,
+        events: [
+          { kind: 'user_message', time: Date.now(), text: 'finish this exact job', messageId: 'm-stale-pending' },
+          {
+            kind: 'assistant_message',
+            time: Date.now() + 1,
+            messageId: 'a-stale-pending',
+            turnId: 'turn-stale-pending',
+            text: 'This pass is complete.',
+            state: 'final',
+            final: true,
+            goalEligible: true,
+            activeNow: true
+          }
+        ]
+      }
+    });
+    expect(first.status).toBe(200);
+    expect(goalPendingReplyFor(chat)).toMatchObject({ replyId: 'a-stale-pending', turnId: 'turn-stale-pending' });
+
+    // The original live failure: the Goal row stays pending while the conversation has already
+    // started newer work. That old final must become a tombstone immediately and durably.
+    const moved = await request('POST', '/events', {
+      body: {
+        conversationId: chat,
+        events: [{ kind: 'turn_start', time: Date.now() + 2, turnId: 'turn-after-stale-pending' }]
+      }
+    });
+    expect(moved.status).toBe(200);
+    expect(goalPendingReplyFor(chat)).toBeNull();
+    const saved = await readDurable<Parameters<typeof restoreGoalReplies>[0]>(GOAL_REPLIES_STATE);
+    expect(saved).toMatchObject({
+      replies: expect.arrayContaining([
+        expect.objectContaining({ conversationId: chat, replyId: 'a-stale-pending', state: 'handled' })
+      ])
+    });
+
+    // Simulate the durable Goal ledger crossing an app restart. A replacement page must not see
+    // the old final as work again, even though the row itself is retained as a tombstone.
+    resetGoalStateForTests();
+    restoreGoalReplies(saved);
+    expect(goalPendingReplyFor(chat)).toBeNull();
+    const afterRestart = await request('GET', `/activity?conversationId=${chat}`);
+    expect(afterRestart.status).toBe(200);
+    expect(afterRestart.body.goal.pending).toBeNull();
+  });
+
   it('makes Goal Off a durable ticket cancel and On a fresh pickup of the same final', async () => {
     await pair();
     const chat = 'cafe0076-0000-4000-8000-000000000076';
@@ -9444,10 +9497,12 @@ it('retires an already armed ordinary Goal repair when its conversation is now A
     await request('POST', '/events', { body: { conversationId: chat, events: [
       { kind: 'model_selection', model: 'gpt-5.6-sol', reasoningEffort: 'high', time: Date.now() },
       { kind: 'turn_start', turnId: 'legacy-goal-turn', time: Date.now() },
+      { kind: 'assistant_message', messageId: 'legacy-final', turnId: 'legacy-goal-turn', text: 'Legacy pass complete.',
+        state: 'final', final: true, goalEligible: true, activeNow: true, time: Date.now() },
       { kind: 'turn_end', turnId: 'legacy-goal-turn', outcome: 'completed', time: Date.now() }
     ] } });
     const sessionId = (await request('GET', `/activity?conversationId=${chat}`)).body.sessionId;
-    await acceptGoalReplyNow({ conversationId: chat, sessionId, replyId: 'legacy-final', turnId: 'legacy-goal-turn', eventSeq: 100, blocked: false });
+    expect(goalPendingReplyFor(chat)).toMatchObject({ replyId: 'legacy-final', turnId: 'legacy-goal-turn' });
     await vi.advanceTimersByTimeAsync(120001);
     await sweepStaleSwarm(Date.now());
     expect((await request('GET', '/status')).body.repairs).toEqual(expect.arrayContaining([expect.objectContaining({ conversationId: chat, reason: 'goal' })]));

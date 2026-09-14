@@ -67,6 +67,7 @@ import {
   pendingGoalReplies,
   retireGoalDrafts,
   retireGoalDraftsFor,
+  retireStaleGoalReplyNow,
   setGoalReplyActiveNow,
   withdrawSilenceGoalReplyNow,
   setGoalObjectiveNow,
@@ -1717,6 +1718,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
             blocked: superseded || goalFencedChat(id)
           });
         }
+        // A durable Goal row belongs to one exact stable final. Any later authored turn/message
+        // or post-final tool activity makes that row historical; retire it in the same recorder
+        // transaction boundary so neither a replacement page nor the watchdog can revive it.
+        await retireStaleGoalReplyNow(id);
       } catch (err) {
         logWarn(
           `bridge: Goal reply decision for ${id} is not durable yet — ${err instanceof Error ? err.message : String(err)}`
@@ -1860,6 +1865,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const finishOnly = !!astraSession && await astraFinishOnly(astraSession.id, id);
     const silenceSuppressed = finishOnly || await suppressProSilence(id);
     const goalView = async () => {
+      // Repair stale persisted state before publishing it back to a replacement content script.
+      // This is the restart boundary: an old pending row may have survived while newer recorder
+      // events were already durable, and exposing it here would let the page resurrect history.
+      if (!superseded && !silenceSuppressed && goalPendingReplyFor(id)) {
+        await retireStaleGoalReplyNow(id);
+      }
       const draft = superseded || silenceSuppressed ? null : goalViewFor(id, goalClient);
       return ({
       enabled: !superseded && !finishOnly && goalEnabledFor(id),
@@ -2676,6 +2687,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const clientId = typeof body['clientId'] === 'string' ? body['clientId'].slice(0, 100) : '';
     if (!id) return json(res, 400, { error: 'bad_conversation_id' }, origin);
     if (!turnId) return json(res, 400, { error: 'bad_turn_id' }, origin);
+    const pendingBeforeReconcile = goalPendingReplyFor(id);
+    if (pendingBeforeReconcile && await retireStaleGoalReplyNow(id) && pendingBeforeReconcile.turnId === turnId) {
+      return json(res, 409, { error: 'goal_reply_not_pending', retryable: false }, origin);
+    }
     const astraSession = await findSessionByConversation(id, { requireUnique: true });
     if (astraSession && await astraFinishOnly(astraSession.id, id)) return json(res, 409, { error: 'astra_finish_only', retryable: false }, origin);
     if (turnId.startsWith('g-silence-') && goalPendingReplyFor(id)?.turnId !== turnId) {
@@ -6073,7 +6088,25 @@ function noteGoalWatchActivity(conversationId: string): void {
  */
 async function inspectOwedGoals(now: number): Promise<boolean> {
   if (goalWatchFloor === null) return false;
-  const owed = new Map(pendingGoalReplies(now).map((reply) => [reply.conversationId, reply]));
+  const reconcileFailed = new Set<string>();
+  for (const reply of pendingGoalReplies(now)) {
+    try {
+      await retireStaleGoalReplyNow(reply.conversationId);
+    } catch (err) {
+      // Fail closed: an obligation whose stale/current status could not be made durable is not
+      // permission to reload the user's chat. A later maintenance pass retries reconciliation.
+      reconcileFailed.add(reply.conversationId);
+      forgetGoalWatch(reply.conversationId);
+      logWarn(
+        `bridge: could not reconcile Goal reply for ${reply.conversationId} — ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+  const owed = new Map(
+    pendingGoalReplies(now)
+      .filter((reply) => !reconcileFailed.has(reply.conversationId))
+      .map((reply) => [reply.conversationId, reply])
+  );
   for (const [conversationId, reply] of owed) {
     // Legacy normal Goal replies and model switches cannot restore browser-turn
     // continuation authority to Astra. The cleanup below also retires its repair.

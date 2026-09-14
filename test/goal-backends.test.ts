@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GOAL_CONTINUATIONS, GOAL_MARKER_INSTRUCTION, templateGoalDecision } from '../src/shared/goal-templates.js';
+import { MAX_CHATGPT_MESSAGE_CHARS } from '../src/shared/user-prompt.js';
 import { promises as fs } from 'node:fs';
 const browser = vi.hoisted(() => ({ request: vi.fn(), authorize: vi.fn() }));
 vi.mock('../src/main/session/input.js', () => ({ requestBrowserDecision: browser.request, authorizeBrowserHelperRetry: browser.authorize, listInputs: async () => [] }));
@@ -177,6 +178,44 @@ describe('Goal decision backends', () => {
     expect(browser.request.mock.calls[2]?.[2]).toMatchObject({ conversationId: 'incremental-helper' });
     expect(fetch).not.toHaveBeenCalled();
   });
+  it('compacts an oversized browser-helper transcript without losing the original request or newest result', async () => {
+    const config = defaultConfig();
+    await saveConfig({ ...config, goal: { ...config.goal, enabled: true, backend: 'chatgpt' } });
+    const conversationId = 'browser-context-budget';
+    const session = await createSession({ title: 'Large Goal helper context', conversationId });
+    const original = 'ORIGINAL REQUEST: finish the durability repair and prove the real workflow';
+    await appendEvent(session.id, {
+      time: 1000, source: 'extension', kind: 'user_message',
+      message: { text: original, chars: original.length, truncated: false }
+    });
+    for (let index = 0; index < 12; index++) {
+      const answer = `work chunk ${index}\n${String(index % 10).repeat(12_500)}`;
+      await appendEvent(session.id, {
+        time: 2000 + index * 2, source: 'extension', kind: 'assistant_message', final: true,
+        message: { text: answer, chars: answer.length, truncated: false }
+      });
+      const followup = `continue chunk ${index}`;
+      await appendEvent(session.id, {
+        time: 2001 + index * 2, source: 'extension', kind: 'user_message',
+        message: { text: followup, chars: followup.length, truncated: false }
+      });
+    }
+    const latest = 'LATEST RESULT: the end-to-end smoke still fails on one exact action';
+    await appendEvent(session.id, {
+      time: 5000, source: 'extension', kind: 'assistant_message', final: true,
+      message: { text: latest, chars: latest.length, truncated: false }
+    });
+    browser.request.mockResolvedValueOnce('{"action":"continue","reply":"repair that exact failing action"}');
+
+    goal.startGoalDraft({ conversationId, sessionId: session.id, turnId: 'large-final' });
+    expect((await settled(conversationId)).stage).toBe('ready');
+    expect(browser.request).toHaveBeenCalledTimes(1);
+    const prompt = String(browser.request.mock.calls[0]?.[0] ?? '');
+    expect(prompt.length).toBeLessThanOrEqual(MAX_CHATGPT_MESSAGE_CHARS);
+    expect(prompt).toContain(original);
+    expect(prompt).toContain(latest);
+    expect(prompt).toContain('Replace the previous reference transcript');
+  });
   it('requires an API key for API finish follow-ups', async () => {
     const backend = 'api';
     await saveConfig({ ...defaultConfig(), goal: { ...defaultConfig().goal, backend: 'templates', loopBackend: backend } });
@@ -315,6 +354,23 @@ describe('Goal decision backends', () => {
     expect(view.turnId).toBe('new');
     expect(view.reply).toBe(goal.humanReply('newest work'));
   });
+});
+
+it('retires deterministic browser context overflow instead of retrying or reloading the owed final', async () => {
+  await saveConfig({ ...defaultConfig(), goal: { ...defaultConfig().goal, enabled: true, backend: 'chatgpt' } });
+  const id = 'browser-context-overflow-terminal';
+  await goal.setGoalSwitchNow(id, 'goal', true);
+  const sessionId = await recording(id, 'Newest result');
+  await goal.acceptGoalReplyNow({ conversationId: id, sessionId, replyId: 'reply-overflow', turnId: 'turn-overflow', eventSeq: 10, blocked: false });
+  browser.request.mockRejectedValueOnce(new Error('goal_context_too_large'));
+
+  goal.startGoalDraft({ conversationId: id, sessionId, turnId: 'turn-overflow' });
+  expect(await settled(id)).toMatchObject({
+    stage: 'failed',
+    error: 'goal_context_too_large',
+    retryable: false
+  });
+  expect(goal.goalPendingReplyFor(id)).toBeNull();
 });
 
 it('retires an unretryable helper pickup durably without retiring a newer final', async () => {

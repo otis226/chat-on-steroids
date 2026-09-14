@@ -90,6 +90,7 @@ describe('the user’s own connector instructions', () => {
     expect(text).not.toContain('Use update_plan');
     expect(text).toContain('write_stdin wait_for="exit"');
     expect(text).toContain('instead of polling every log chunk');
+    expect(text).toContain('process exit returns immediately');
     expect(serverInstructions({ ...ctx, sessionTools: true }, 'core', 'win32')).toContain('Use update_plan');
     const withoutCommands = serverInstructions({ ...ctx, caps: { ...ctx.caps, command: false } }, 'core', 'linux');
     expect(withoutCommands).toContain('find searches');

@@ -550,8 +550,10 @@ For a still-running non-interactive build, test, package or similar bounded job,
 `write_stdin(wait_for="exit")` with an appropriate long `yield_time_ms`. Intermediate log chunks
 remain buffered locally and do not force one model/tool round trip per chunk. The default
 `wait_for="output"` preserves the existing interactive/progress behavior and returns when output
-arrives. Do not poll merely because a job is chatty; poll for intermediate output only when that
-output can change the next decision or when interactive input is required.
+arrives. `yield_time_ms` is a ceiling, not a sleep: exit notification returns immediately, so do
+not add artificial delay/backoff merely to reduce requests. Do not poll merely because a job is
+chatty; poll for intermediate output only when that output can change the next decision or when
+interactive input is required.
 
 The owner is the **durable local session principal** established by correlation. A→B compaction
 keeps that principal, so B can continue A's live terminal without an adoption/move fallback.

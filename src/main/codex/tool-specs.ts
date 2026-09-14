@@ -98,10 +98,10 @@ export const WRITE_STDIN_CHARS_DESCRIPTION =
   'Bytes to write to stdin. Defaults to empty, which polls without writing.';
 
 export const WRITE_STDIN_YIELD_TIME_DESCRIPTION =
-  'Maximum local wait. Non-empty writes default to 250 ms and cap at 30000 ms. Empty waits use a 5000 ms minimum and may wait up to 300000 ms. With wait_for="output" they return early on the first output; with wait_for="exit" output stays buffered until the process exits or this timeout expires.';
+  'Maximum local wait, not a sleep. Non-empty writes default to 250 ms and cap at 30000 ms. Empty waits use a 5000 ms minimum and may wait up to 300000 ms. With wait_for="output" they return early on the first output; with wait_for="exit" output stays buffered and returns immediately when the process exits, or when this timeout expires if it is still running.';
 
 export const WRITE_STDIN_WAIT_FOR_DESCRIPTION =
-  'What ends an empty wait. "output" is the backward-compatible interactive behavior and returns when any output arrives. "exit" is for non-interactive builds/tests/package jobs: keep buffering local output and return only when the process exits or yield_time_ms expires. Defaults to "output".';
+  'What ends an empty wait. "output" is the backward-compatible interactive behavior and returns when any output arrives. "exit" is for non-interactive builds/tests/package jobs: keep buffering local output and return immediately on process exit; yield_time_ms is only the maximum wait if the process is still running. Defaults to "output".';
 
 /**
  * `APPLY_PATCH_LARK_GRAMMAR` (`core/src/tools/handlers/apply_patch.lark`).

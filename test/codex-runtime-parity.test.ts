@@ -356,6 +356,7 @@ describe('Codex unified exec runtime parity', () => {
     expect(waited.processId).toBeNull();
     expect(waited.exitCode).toBe(0);
     expect(waited.wallTimeMs).toBeGreaterThan(900);
+    expect(waited.wallTimeMs).toBeLessThan(3_000);
   });
 
   it.runIf(process.platform === 'win32')('forces UTF-8 for PowerShell pipe output like Codex', async () => {

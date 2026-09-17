@@ -11,11 +11,15 @@
  * task packet's original contract and the proven CoMind helper it was ported from.
  */
 
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   findRecentCodexDesktopThread,
   isEligibleCodexDesktopHeader,
   parseCodexSessionHeader,
+  realCodexSessionReader,
   type SessionFile,
   type SessionFileReader
 } from '../src/main/harness/codex-sessions.js';
@@ -131,5 +135,26 @@ describe('findRecentCodexDesktopThread', () => {
       { path: 'ok.jsonl', mtimeMs: 1, firstLine: line('Codex Desktop', 'vscode', 'sess-ok', '/repo/target') }
     ]);
     expect(await findRecentCodexDesktopThread(reader)).toBe('sess-ok');
+  });
+
+  it('reads a real Desktop session_meta first line larger than the old 8 KiB ceiling', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cos-codex-session-'));
+    try {
+      const file = path.join(dir, 'large.jsonl');
+      const firstLine = JSON.stringify({
+        payload: {
+          padding: 'x'.repeat(20 * 1024),
+          originator: 'Codex Desktop',
+          source: 'vscode',
+          session_id: 'large-desktop-session',
+          cwd: '/repo'
+        }
+      });
+      expect(Buffer.byteLength(firstLine, 'utf8')).toBeGreaterThan(8 * 1024);
+      await fs.writeFile(file, `${firstLine}\n${JSON.stringify({ type: 'event' })}\n`, 'utf8');
+      expect(await findRecentCodexDesktopThread(realCodexSessionReader(dir))).toBe('large-desktop-session');
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });

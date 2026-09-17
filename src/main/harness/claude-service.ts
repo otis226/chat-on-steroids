@@ -18,6 +18,7 @@ import { runCommand } from '../exec.js';
 import {
   buildClaudeAgentsListArgs,
   buildClaudeResumeArgs,
+  buildClaudeStopArgs,
   findClaudeAgentBySessionId,
   parseClaudeAgentsJson,
   type ClaudeAgentEntry
@@ -52,6 +53,7 @@ function claudeAgentStatus(entry: ClaudeAgentEntry): string | null {
 
 const CLAUDE_START_TIMEOUT_MS = 60_000;
 const CLAUDE_CONTINUE_TIMEOUT_MS = 60_000;
+const CLAUDE_STOP_TIMEOUT_MS = 20_000;
 const CLAUDE_AGENTS_TIMEOUT_MS = 20_000;
 const DEFAULT_VERIFY_ATTEMPTS = 5;
 const DEFAULT_VERIFY_DELAY_MS = 1_000;
@@ -103,6 +105,27 @@ export async function verifyClaudeSessionActive(
     if (result.exitCode === 0) {
       const entries = parseClaudeAgentsJson(result.stdout);
       if (findClaudeAgentBySessionId(entries, sessionId)) return true;
+    }
+    if (attempt < attempts - 1) await sleep(delayMs);
+  }
+  return false;
+}
+
+/** Waits until Claude no longer owns a background daemon for this exact UUID. */
+async function verifyClaudeSessionStopped(
+  runner: ClaudeRunner,
+  cwd: string,
+  sessionId: string,
+  options: ClaudeVerifyOptions = {}
+): Promise<boolean> {
+  const attempts = options.attempts ?? DEFAULT_VERIFY_ATTEMPTS;
+  const delayMs = options.delayMs ?? DEFAULT_VERIFY_DELAY_MS;
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const result = await runner.run(buildClaudeAgentsListArgs(), cwd, CLAUDE_AGENTS_TIMEOUT_MS);
+    if (result.exitCode === 0) {
+      const entries = parseClaudeAgentsJson(result.stdout);
+      if (!findClaudeAgentBySessionId(entries, sessionId)) return true;
     }
     if (attempt < attempts - 1) await sleep(delayMs);
   }
@@ -223,13 +246,11 @@ export async function claudeStart(
 /**
  * `claude --bg --resume <sessionId> <prompt>`, with no other flags. See claude-cli.ts.
  *
- * First inspects this exact session's own `claude agents --json` entry and refuses while it
- * reports an active status (working/busy/blocked/running): resuming a session that is not
- * actually idle risks Claude Code starting a copy/new conversation instead of continuing the
- * stored one, which is exactly the same-key-same-conversation guarantee this tool exists to
- * keep. An entry that cannot be found at all is left to the resume command itself to reject,
- * unchanged from before this check existed — the agents list is not a published contract and
- * this must not turn "could not confirm status" into a new hard failure mode.
+ * Claude 2.1.259 keeps a completed `done`/`idle` background daemon registered. Resuming while
+ * that daemon still exists returns exit 0 but starts a *copy* with another UUID. Therefore an
+ * existing idle daemon must be stopped and proven absent before `--bg --resume` is safe. A
+ * genuinely busy daemon is refused instead. A session already absent from `agents` resumes
+ * directly from its normal-history conversation.
  */
 export async function claudeContinue(
   runner: ClaudeRunner,
@@ -250,11 +271,32 @@ export async function claudeContinue(
       `Session ${sessionId} is currently '${status}' in 'claude agents --json' — refusing to send --resume while it is still working. Wait for it to finish and try again.`
     );
   }
+  if (entry) {
+    const stopped = await runner.run(buildClaudeStopArgs(sessionId), workdirReal, CLAUDE_STOP_TIMEOUT_MS);
+    if (stopped.timedOut) {
+      throw new ClaudeServiceError(
+        `Could not stop Claude's completed background daemon for ${sessionId} before resume: ` +
+          `timed out: ${(stopped.stderr || stopped.stdout).slice(0, 2000)}`
+      );
+    }
+    const absentAfterStop = await verifyClaudeSessionStopped(runner, workdirReal, sessionId);
+    if (!absentAfterStop) {
+      throw new ClaudeServiceError(
+        `Claude background daemon ${sessionId} remained registered after stop${stopped.exitCode !== 0 ? ` (stop exit ${stopped.exitCode ?? 'null'}: ${(stopped.stderr || stopped.stdout).slice(0, 1000)})` : ''}; ` +
+          'refusing --resume because Claude can create a copy while the original daemon still exists.'
+      );
+    }
+  }
   const args = buildClaudeResumeArgs({ sessionId, prompt });
   const result = await runner.run(args, workdirReal, CLAUDE_CONTINUE_TIMEOUT_MS);
   if (result.timedOut || result.exitCode !== 0) {
     throw new ClaudeServiceError(
       `claude --bg --resume ${result.timedOut ? 'timed out' : `exited with code ${result.exitCode ?? 'null'}`}: ${(result.stderr || result.stdout).slice(0, 2000)}`
+    );
+  }
+  if (/started a copy as/i.test(`${result.stdout}\n${result.stderr}`)) {
+    throw new ClaudeServiceError(
+      `Claude refused same-session resume for ${sessionId} and reported that it started a copy. The copy is not accepted as this workstream's conversation.`
     );
   }
   const backgroundVerified = await verifyClaudeSessionActive(runner, workdirReal, sessionId);

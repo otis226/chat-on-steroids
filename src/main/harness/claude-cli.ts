@@ -46,6 +46,15 @@ export function buildClaudeResumeArgs(request: ClaudeResumeArgsRequest): string[
   return ['--bg', '--resume', request.sessionId, request.prompt];
 }
 
+/**
+ * Claude's `stop` subcommand addresses the background daemon by its short id, while `resume`
+ * uses the full conversation UUID. The caller has already resolved the exact full UUID through
+ * `agents --json` before using this builder, so the short id is transport identity only.
+ */
+export function buildClaudeStopArgs(sessionId: string): string[] {
+  return ['stop', sessionId.slice(0, 8)];
+}
+
 export function buildClaudeAgentsListArgs(): string[] {
   return ['agents', '--json'];
 }

@@ -770,6 +770,9 @@ UUID in background mode and is promoted active only after exact background ident
 Control bridge evidence are proven. Transcript/job persistence or an `agents` row alone is not
 user-visible-session acceptance. Later turns resume exactly that UUID without launch-only flags and
 refuse a continue while the same session is already busy or no longer has normal-history evidence.
+Claude 2.1.259 may leave a completed `done`/`idle` background daemon registered; Core stops that
+daemon and proves the full UUID absent from `agents` before resuming, because resuming while the old
+daemon still exists can return success while silently creating a copy with another UUID.
 
 `harness/store.ts` persists bindings in `state/harness-bindings.json`. Critical state transitions
 serialize per store, write the exact snapshot before publishing it in memory, and retain the last

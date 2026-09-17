@@ -102,7 +102,11 @@ export async function findRecentCodexDesktopThread(reader: SessionFileReader): P
 
 const MAX_WALK_DEPTH = 6;
 const MAX_FILES_SCANNED = 2_000;
-const FIRST_LINE_READ_BYTES = 8 * 1024;
+// Recent Codex Desktop `session_meta` rows embed a large instruction payload before the first
+// newline. Live 2026-09 evidence measured an eligible first line at ~22 KiB, so the old 8 KiB
+// read truncated valid JSON and made every Desktop thread look ineligible. Keep this bounded,
+// but large enough for the current native format.
+const FIRST_LINE_READ_BYTES = 64 * 1024;
 
 async function walk(dir: string, depth: number, out: string[]): Promise<void> {
   if (depth > MAX_WALK_DEPTH || out.length >= MAX_FILES_SCANNED) return;

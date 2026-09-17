@@ -213,26 +213,48 @@ describe('claudeStart', () => {
 });
 
 describe('claudeContinue', () => {
-  it('runs exactly --bg --resume <sessionId> <prompt> when the session is confirmed idle', async () => {
-    let seenArgs: readonly string[] | null = null;
+  it('stops an existing idle daemon, proves it absent, then resumes the exact UUID', async () => {
+    const seen: string[][] = [];
+    let stopped = false;
+    let resumed = false;
     const runner = fakeRunner((args) => {
-      if (args[0] === 'agents') return ok(JSON.stringify([{ sessionId: SESSION_ID, status: 'idle' }]));
-      seenArgs = args;
+      seen.push([...args]);
+      if (args[0] === 'agents') {
+        if (resumed) return ok(JSON.stringify([{ sessionId: SESSION_ID, status: 'working' }]));
+        return ok(JSON.stringify(stopped ? [] : [{ sessionId: SESSION_ID, status: 'idle' }]));
+      }
+      if (args[0] === 'stop') {
+        stopped = true;
+        return ok('stopped');
+      }
+      resumed = true;
       return ok();
     });
     await claudeContinue(runner, fakeSurface(), '/repo', SESSION_ID, 'next step');
-    expect(seenArgs).toEqual(['--bg', '--resume', SESSION_ID, 'next step']);
+    expect(seen).toContainEqual(['stop', SESSION_ID.slice(0, 8)]);
+    expect(seen).toContainEqual(['--bg', '--resume', SESSION_ID, 'next step']);
   });
 
-  it('still resumes when the session has no reported status at all', async () => {
-    let seenArgs: readonly string[] | null = null;
+  it('also stops an existing daemon whose status field is missing before resume', async () => {
+    let stopped = false;
+    let resumed = false;
+    const seen: string[][] = [];
     const runner = fakeRunner((args) => {
-      if (args[0] === 'agents') return ok(JSON.stringify([{ sessionId: SESSION_ID }]));
-      seenArgs = args;
+      seen.push([...args]);
+      if (args[0] === 'agents') {
+        if (resumed) return ok(JSON.stringify([{ sessionId: SESSION_ID }]));
+        return ok(JSON.stringify(stopped ? [] : [{ sessionId: SESSION_ID }]));
+      }
+      if (args[0] === 'stop') {
+        stopped = true;
+        return ok();
+      }
+      resumed = true;
       return ok();
     });
     await claudeContinue(runner, fakeSurface(), '/repo', SESSION_ID, 'next step');
-    expect(seenArgs).toEqual(['--bg', '--resume', SESSION_ID, 'next step']);
+    expect(seen).toContainEqual(['stop', SESSION_ID.slice(0, 8)]);
+    expect(seen).toContainEqual(['--bg', '--resume', SESSION_ID, 'next step']);
   });
 
   it('resumes a stopped visible session that is absent from agents, then proves the same UUID reappeared', async () => {
@@ -246,6 +268,45 @@ describe('claudeContinue', () => {
     });
     await claudeContinue(runner, fakeSurface(), '/repo', SESSION_ID, 'next step');
     expect(seenArgs).toEqual(['--bg', '--resume', SESSION_ID, 'next step']);
+  });
+
+  it('does not resume when stopping the existing idle daemon fails', async () => {
+    let resumeRan = false;
+    const runner = fakeRunner((args) => {
+      if (args[0] === 'agents') return ok(JSON.stringify([{ sessionId: SESSION_ID, status: 'idle' }]));
+      if (args[0] === 'stop') return failed(2, 'stop failed');
+      resumeRan = true;
+      return ok();
+    });
+    await expect(claudeContinue(runner, fakeSurface(), '/repo', SESSION_ID, 'x')).rejects.toThrow(ClaudeServiceError);
+    expect(resumeRan).toBe(false);
+  });
+
+  it('continues safely when the daemon disappears between status and stop', async () => {
+    let agentsCalls = 0;
+    let resumed = false;
+    const runner = fakeRunner((args) => {
+      if (args[0] === 'agents') {
+        agentsCalls += 1;
+        if (resumed) return ok(JSON.stringify([{ sessionId: SESSION_ID }]));
+        return ok(JSON.stringify(agentsCalls === 1 ? [{ sessionId: SESSION_ID, status: 'idle' }] : []));
+      }
+      if (args[0] === 'stop') return failed(1, 'No job matching');
+      resumed = true;
+      return ok();
+    });
+    await claudeContinue(runner, fakeSurface(), '/repo', SESSION_ID, 'x');
+    expect(resumed).toBe(true);
+  });
+
+  it('rejects an exit-0 resume that reports Claude started a copy', async () => {
+    let resumed = false;
+    const runner = fakeRunner((args) => {
+      if (args[0] === 'agents') return ok(JSON.stringify(resumed ? [{ sessionId: SESSION_ID }] : []));
+      resumed = true;
+      return ok('note: session uuid-1 is already running in the background, so this started a copy as other-id.');
+    });
+    await expect(claudeContinue(runner, fakeSurface(), '/repo', SESSION_ID, 'x')).rejects.toThrow(/started a copy/i);
   });
 
   it('refuses to continue a background-only session that is not indexed in normal Claude history', async () => {

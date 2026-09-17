@@ -332,9 +332,10 @@ describe('continueHarness', () => {
     );
   });
 
-  it('runs exactly --bg --resume <sessionId> <prompt> for a claude continue', async () => {
+  it('stops the completed background daemon, then resumes the exact same UUID for a claude continue', async () => {
     const calls: (readonly string[])[] = [];
     let sessionId: string | null = null;
+    let backgroundPresent = false;
     const claudeSurface: ClaudeSessionSurface = {
       bootstrap: async (request) => { sessionId = request.sessionId; },
       isHistoryVisible: async () => true,
@@ -342,13 +343,19 @@ describe('continueHarness', () => {
     };
     const claudeRunner = fakeClaudeRunner((args) => {
       calls.push(args);
-      if (args[0] === 'agents') return claudeOk(JSON.stringify(sessionId ? [{ sessionId }] : []));
+      if (args[0] === 'agents') return claudeOk(JSON.stringify(sessionId && backgroundPresent ? [{ sessionId }] : []));
+      if (args[0] === 'stop') {
+        backgroundPresent = false;
+        return claudeOk();
+      }
+      if (args[0] === '--bg' && args[1] === '--resume') backgroundPresent = true;
       return claudeOk();
     });
     const d = deps({ claudeRunner, claudeSurface });
     await startHarness(d, 'session-A', WORKDIR, { kind: 'claude', key: 'c2', title: 'T', prompt: 'first' });
     calls.length = 0;
     await continueHarness(d, 'session-A', { key: 'c2', prompt: 'second' });
+    expect(calls).toContainEqual(['stop', sessionId!.slice(0, 8)]);
     const resumeCall = calls.find((c) => c[1] === '--resume');
     expect(resumeCall).toEqual(['--bg', '--resume', sessionId, 'second']);
   });

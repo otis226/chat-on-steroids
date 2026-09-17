@@ -114,14 +114,23 @@ async function readRemoteControlReady(sessionId: string): Promise<boolean> {
  * The coordinator has already resolved/authorized the exact workdir before reaching this seam,
  * so answering the TUI's local trust question is the UI equivalent of that existing authority.
  */
-function looksLikeTrustPrompt(output: string): boolean {
-  return output.includes('Quick') && output.includes('safety') && output.includes('trust?');
+function visibleTerminalText(output: string): string {
+  return output
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, '')
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
 }
 
-function looksLikeReadyTui(output: string): boolean {
-  // With --remote-control the normal TUI exposes /rc in its status line. The trust screen does
-  // not. Waiting for this avoids writing /exit while Claude is still in its startup chooser.
-  return output.includes('/rc');
+function looksLikeTrustPrompt(output: string): boolean {
+  const visible = visibleTerminalText(output);
+  return visible.includes('Quick') && visible.includes('safety') && visible.includes('trust?');
+}
+
+export function claudeTuiRemoteControlReady(output: string): boolean {
+  // Claude renders status text through ANSI-styled fragments, so raw substring matching can
+  // miss visible text such as "/remote-control is active". The connecting indicator alone is
+  // intentionally insufficient: bootstrap exits only after Remote Control says it is active.
+  return visibleTerminalText(output).includes('/remote-control is active');
 }
 
 async function bootstrapInteractive(request: ClaudeSurfaceBootstrapRequest): Promise<void> {
@@ -183,7 +192,7 @@ async function bootstrapInteractive(request: ClaudeSurfaceBootstrapRequest): Pro
         pty.write('\u001b[B\r');
         return;
       }
-      if (!exitSent && looksLikeReadyTui(output)) {
+      if (!exitSent && claudeTuiRemoteControlReady(output)) {
         exitSent = true;
         // No model prompt is ever sent. /exit is enough to let Claude persist/index the named
         // normal session while keeping the substantive task untouched for the later resume.
@@ -221,4 +230,3 @@ export function createRealClaudeSessionSurface(): ClaudeSessionSurface {
     isRemoteControlReady: readRemoteControlReady
   };
 }
-

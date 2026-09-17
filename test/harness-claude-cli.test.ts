@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildClaudeBootstrapArgs,
   buildClaudeResumeArgs,
+  buildClaudeStopArgs,
   ClaudeCliError,
   findClaudeAgentBySessionId,
   parseClaudeAgentsJson
@@ -55,6 +56,12 @@ describe('buildClaudeResumeArgs', () => {
       'uuid-1',
       'keep going'
     ]);
+  });
+});
+
+describe('buildClaudeStopArgs', () => {
+  it('uses Claude background daemon short-id transport derived from the exact saved UUID', () => {
+    expect(buildClaudeStopArgs('12345678-abcd-ef00-1111-222233334444')).toEqual(['stop', '12345678']);
   });
 });
 

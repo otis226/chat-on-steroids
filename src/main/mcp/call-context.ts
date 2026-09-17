@@ -33,6 +33,8 @@ export interface CallEvidence {
   running: boolean | null;
   /** Managed-process id when the command continues beyond one MCP response. */
   processSessionId: string | null;
+  /** Whether this exec/write_stdin response actually drained process output bytes. */
+  outputReceived?: boolean;
 }
 
 /**
@@ -305,6 +307,7 @@ export function noteExec(result: {
   exitCode: number | null;
   timedOut?: boolean;
   durationMs?: number;
+  outputReceived?: boolean;
   /**
    * The caller has proven this non-zero exit is a reported result, not a failure. Only
    * `exec_command` can know this, because only it has the command line.
@@ -314,6 +317,7 @@ export function noteExec(result: {
   const store = storage.getStore();
   if (!store) return;
   noteProcess(result);
+  if (typeof result.outputReceived === 'boolean') store.evidence.outputReceived = result.outputReceived;
   store.evidence.timedOut = result.timedOut === true;
   // A timeout is our failure and outranks a child status; benign child statuses are exempt.
   const exempt = result.benignExit === true;

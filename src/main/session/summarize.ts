@@ -328,6 +328,7 @@ function build(
     case 'write_stdin': {
       const id = typeof args['session_id'] === 'number' ? String(args['session_id']) : str(args['session_id']) ?? '';
       const signal = str(args['signal']);
+      const receivedOutput = evidence.outputReceived === true;
       const title =
         signal === 'kill'
           ? `Stopped session ${id}`.trim()
@@ -335,7 +336,9 @@ function build(
             ? `Interrupted session ${id}`.trim()
             : str(args['chars'])
               ? `Wrote to session ${id}`.trim()
-              : `Waited on session ${id}`.trim();
+              : receivedOutput
+                ? `Received output from session ${id}`.trim()
+                : `Waited on session ${id}`.trim();
       const failed = !evidence.benignExit && evidence.exitCode !== null && evidence.exitCode !== 0;
       return { kind: 'process', tone: signal === 'kill' ? 'warn' : failed ? 'bad' : 'neutral', title,
         ...(evidence.exitCode === null ? {} : { metric: failed ? `✕ exit ${evidence.exitCode}` : '✓ finished' }) };

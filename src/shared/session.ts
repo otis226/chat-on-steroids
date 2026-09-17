@@ -197,7 +197,19 @@ export interface ToolCallRecord {
   /** Internal code-mode invocation: retained for audit, never a separate model exchange. */
   nested?: boolean;
   /** Child lifetime, independent of the initial tool response and output delivery. */
-  process?: { sessionId: string; completedAt?: number; exitCode?: number | null; durationMs?: number; benignExit?: boolean };
+  process?: {
+    sessionId: string;
+    completedAt?: number;
+    exitCode?: number | null;
+    durationMs?: number;
+    benignExit?: boolean;
+    /** User-facing continuation updates folded into this one logical execution row. */
+    activityUpdates?: number;
+    outputUpdates?: number;
+    lastActivity?: 'output' | 'waiting' | 'input';
+  };
+  /** Existing exec_command call identity whose process this raw continuation updated. */
+  processParentCallId?: string;
   /** Recorded model evidence, when known; absence is not the current picker selection. */
   model?: string;
   reasoningEffort?: ReasoningEffort;

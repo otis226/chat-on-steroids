@@ -98,7 +98,7 @@ const {
   resetGoalStateForTests,
   setGoalObjective
 } = await import('../src/main/goal.js');
-const { completeProcessCall, createSession, deleteSession, findSessionByConversation, getSession,
+const { completeProcessCall, createSession, deleteSession, findSessionByConversation, flushSessions, getSession,
   initSessionStore, readEvents, recordProcessCall, resetSessionStoreForTests } = await import(
   '../src/main/session/store.js'
 );
@@ -1507,6 +1507,154 @@ describe('activity feed', () => {
     expect(rows.get('nonzero')).toMatchObject({ displayOutcome: { code: 'failed', label: 'failed · exit 7', exitCode: 7 }, durationMs: 21 });
     expect(rows.get('unknown')).toMatchObject({ displayOutcome: { code: 'finished', label: 'finished · exit unknown', exitCode: null }, durationMs: 22 });
     expect(rows.get('legacy-missing')).toMatchObject({ displayOutcome: { code: 'finished', label: 'finished · exit unknown', exitCode: null }, durationMs: 30 });
+  });
+
+  it('folds repeated write_stdin output and waits into the canonical exec activity while retaining raw audit calls', async () => {
+    await pair();
+    const conversationId = '69696969-1111-4222-8333-444444444444';
+    const opened = await request('POST', '/events', { body: { conversationId, events: [
+      { kind: 'turn_start', time: Date.now(), turnId: 'process-fold-turn' }
+    ] } });
+    const sessionId = opened.body.sessionId as string;
+    await recordProcessCall(sessionId, {
+      kind: 'tool_call', source: 'mcp', time: 100, turnId: 'process-fold-turn', call: {
+        callId: 'process-fold-parent', conversationId, requestId: 'request-process-fold-parent',
+        attribution: 'request_id', attributionMethod: 'request_id', tool: 'exec_command',
+        args: { text: '{"cmd":"npm run fixture"}', chars: 25, truncated: false },
+        result: { text: 'initial output', chars: 14, truncated: false }, durationMs: 5, outcome: 'ok',
+        process: { sessionId: '55' },
+        summary: { kind: 'run', tone: 'neutral', title: 'Started npm run fixture', metric: 'started' }
+      }
+    });
+    const evidence = (outputReceived: boolean) => ({
+      changes: [], assets: [], count: null, detail: null, exitCode: null, timedOut: false,
+      durationMs: 1, running: true, processSessionId: '55', outputReceived
+    });
+    await recordToolCall({
+      tool: 'write_stdin', args: { session_id: 55, chars: '', yield_time_ms: 30_000 },
+      content: [{ type: 'text', text: 'Output:\nchunk one' }], outcome: 'ok', durationMs: 1,
+      startedAt: 200, requestId: 'request-process-fold-output', conversationId, evidence: evidence(true)
+    });
+    await recordToolCall({
+      tool: 'write_stdin', args: { session_id: 55, chars: '', yield_time_ms: 30_000 },
+      content: [{ type: 'text', text: 'Output:\n' }], outcome: 'ok', durationMs: 1,
+      startedAt: 300, requestId: 'request-process-fold-wait', conversationId, evidence: evidence(false)
+    });
+    await recordToolCall({
+      tool: 'write_stdin', args: { session_id: 55, chars: '', yield_time_ms: 30_000 },
+      content: [{ type: 'text', text: 'Output:\nchunk two' }], outcome: 'ok', durationMs: 1,
+      startedAt: 400, requestId: 'request-process-fold-output-2', conversationId, evidence: evidence(true)
+    });
+    await recordToolCall({
+      tool: 'write_stdin', args: { session_id: 55, chars: '', yield_time_ms: 30_000 },
+      content: [{ type: 'text', text: 'Output:\n' }], outcome: 'ok', durationMs: 1,
+      startedAt: 500, requestId: 'request-process-fold-wait-2', conversationId, evidence: evidence(false)
+    });
+
+    const audit = await readEvents(sessionId, { kinds: ['tool_call'] });
+    const continuations = audit.filter((event) => event.kind === 'tool_call' && event.call.tool === 'write_stdin');
+    expect(continuations).toHaveLength(4);
+    expect(continuations.map((event) => event.kind === 'tool_call' && event.call.processParentCallId)).toEqual([
+      'process-fold-parent', 'process-fold-parent', 'process-fold-parent', 'process-fold-parent'
+    ]);
+
+    const running = await request('GET', `/activity?conversationId=${conversationId}&since=0`);
+    const runningRows = running.body.stream.filter((entry: any) => entry.kind === 'tool_call');
+    expect(runningRows).toHaveLength(1);
+    expect(runningRows[0]).toMatchObject({
+      callId: 'process-fold-parent', tool: 'exec_command',
+      process: { sessionId: '55', activityUpdates: 4, outputUpdates: 2, lastActivity: 'waiting' },
+      summary: { title: 'Running npm run fixture', detail: 'waiting on session', metric: '4 updates' }
+    });
+    expect(JSON.stringify(running.body)).not.toContain('Waited on session 55');
+    expect(running.body.entries).toHaveLength(1);
+
+    // A page/app reload must reconstruct the same one-row projection from durable history.
+    await flushSessions();
+    resetSessionStoreForTests();
+    resetRecorderForTests();
+    initSessionStore(dir);
+    const reloaded = await request('GET', `/activity?conversationId=${conversationId}&since=0`);
+    const reloadedRows = reloaded.body.stream.filter((entry: any) => entry.kind === 'tool_call');
+    expect(reloadedRows).toHaveLength(1);
+    expect(reloadedRows[0]).toMatchObject({ callId: 'process-fold-parent', process: { activityUpdates: 4, outputUpdates: 2 } });
+
+    await completeProcessCall(sessionId, 'process-fold-parent', { completedAt: 600, durationMs: 500, exitCode: 0 });
+    const completed = await request('GET', `/activity?conversationId=${conversationId}&since=0`);
+    const completedRows = completed.body.stream.filter((entry: any) => entry.kind === 'tool_call');
+    expect(completedRows).toHaveLength(1);
+    expect(completedRows[0]).toMatchObject({
+      callId: 'process-fold-parent', displayOutcome: { code: 'completed', label: 'completed', exitCode: 0 },
+      summary: { title: 'Completed npm run fixture', detail: '4 updates', metric: '✓ finished' }
+    });
+  });
+
+  it('keeps a failed continued process as one failed exec activity and preserves its raw continuation', async () => {
+    await pair();
+    const conversationId = '69696969-4111-4222-8333-444444444444';
+    const opened = await request('POST', '/events', { body: { conversationId, events: [
+      { kind: 'turn_start', time: Date.now(), turnId: 'failed-process-turn' }
+    ] } });
+    const sessionId = opened.body.sessionId as string;
+    await recordProcessCall(sessionId, {
+      kind: 'tool_call', source: 'mcp', time: 100, turnId: 'failed-process-turn', call: {
+        callId: 'failed-process-parent', conversationId, requestId: 'failed-process-parent-request',
+        attribution: 'request_id', attributionMethod: 'request_id', tool: 'exec_command',
+        args: { text: '{}', chars: 2, truncated: false }, result: { text: 'start', chars: 5, truncated: false },
+        durationMs: 5, outcome: 'ok', process: { sessionId: '88' },
+        summary: { kind: 'run', tone: 'neutral', title: 'Started failing fixture', metric: 'started' }
+      }
+    });
+    await recordToolCall({
+      tool: 'write_stdin', args: { session_id: 88, chars: '' }, content: [{ type: 'text', text: 'failure output' }],
+      outcome: 'process_exit_nonzero', durationMs: 1, startedAt: 200, requestId: 'failed-process-child-request', conversationId,
+      evidence: { changes: [], assets: [], count: null, detail: null, exitCode: 7, timedOut: false,
+        durationMs: 100, running: false, processSessionId: null, outputReceived: true }
+    });
+    await completeProcessCall(sessionId, 'failed-process-parent', { completedAt: 300, durationMs: 200, exitCode: 7 });
+
+    const feed = await request('GET', `/activity?conversationId=${conversationId}&since=0`);
+    const rows = feed.body.stream.filter((entry: any) => entry.kind === 'tool_call');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      callId: 'failed-process-parent', displayOutcome: { code: 'failed', label: 'failed · exit 7', exitCode: 7 },
+      summary: { title: 'Command failed failing fixture', detail: '1 update', metric: '✕ exit 7', tone: 'bad' }
+    });
+    const audit = await readEvents(sessionId, { kinds: ['tool_call'] });
+    const child = audit.find((event) => event.kind === 'tool_call' && event.call.tool === 'write_stdin');
+    expect(child && child.kind === 'tool_call' && child.call.processParentCallId).toBe('failed-process-parent');
+  });
+
+  it('scopes identical numeric process ids by durable session before choosing an exec parent', async () => {
+    await pair();
+    const conversations = [
+      '69696969-2111-4222-8333-444444444444',
+      '69696969-3111-4222-8333-444444444444'
+    ];
+    for (const [index, conversationId] of conversations.entries()) {
+      const opened = await request('POST', '/events', { body: { conversationId, events: [
+        { kind: 'turn_start', time: Date.now(), turnId: `scope-turn-${index}` }
+      ] } });
+      await recordProcessCall(opened.body.sessionId, {
+        kind: 'tool_call', source: 'mcp', time: 100 + index, turnId: `scope-turn-${index}`, call: {
+          callId: `scope-parent-${index}`, conversationId, requestId: `scope-parent-request-${index}`,
+          attribution: 'request_id', attributionMethod: 'request_id', tool: 'exec_command',
+          args: { text: '{}', chars: 2, truncated: false }, result: { text: 'initial', chars: 7, truncated: false },
+          durationMs: 5, outcome: 'ok', process: { sessionId: '77' },
+          summary: { kind: 'run', tone: 'neutral', title: `Started scoped ${index}`, metric: 'started' }
+        }
+      });
+      await recordToolCall({
+        tool: 'write_stdin', args: { session_id: 77, chars: '' }, content: [{ type: 'text', text: `chunk ${index}` }],
+        outcome: 'ok', durationMs: 1, startedAt: 300 + index, requestId: `scope-child-request-${index}`, conversationId,
+        evidence: { changes: [], assets: [], count: null, detail: null, exitCode: null, timedOut: false,
+          durationMs: 1, running: true, processSessionId: '77', outputReceived: true }
+      });
+      const feed = await request('GET', `/activity?conversationId=${conversationId}&since=0`);
+      const rows = feed.body.stream.filter((entry: any) => entry.kind === 'tool_call');
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ callId: `scope-parent-${index}`, process: { sessionId: '77', activityUpdates: 1 } });
+    }
   });
 
   it('projects every current non-process outcome without making the content script reinterpret it', async () => {

@@ -964,6 +964,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
               exitCode: output.exitCode,
               timedOut: false,
               benignExit: output.benignExit,
+              outputReceived: output.rawOutput.length > 0,
               durationMs: output.wallTimeMs
             });
             logInfo(`tool write_stdin ${input.session_id} (${(input.chars ?? '').length} chars)`);

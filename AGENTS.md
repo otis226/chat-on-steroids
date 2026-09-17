@@ -1121,11 +1121,22 @@ Destination proof requires the exact Project home, a different connected editor 
 turns. User interaction, cancellation or a foreign route revokes the attempt; no extra tab or
 second click compensates for a missing result.
 
-The brief includes the original task, accepted steering, current result, remaining checks and
-relevant durable ids. Linked project instructions and current executor settings still apply.
-Goal context can use a committed handoff as a provenance anchor; aborted/stale/legacy text is
-not one. A source reply obligation must be superseded when its work has moved, rather than
-mistaken for B's completed turn (§21 records the remaining ledger gap).
+New compactions emit a `CONTINUATION WORKING SET v1`, not a transcript digest. The source chat
+reads the whole conversation but transfers resolved semantic state: current user contract,
+root-cause/architecture reasoning already established, exact implementation ownership and
+candidate/runtime state, still-valid evidence, unresolved work, one executable next action,
+and evidence pointers for optional drill-down. Chronology, repeated status prose and raw tool
+logs stay in the durable session instead of becoming default replacement-chat context. The
+successor should be able to act from the working set without rescanning merely to reconstruct
+reasoning the source already completed.
+
+Legacy briefs remain readable. A v1 working set is structurally validated and bounded for one
+replacement-chat authored message; its raw durable file remains available even when Goal later
+uses a bounded projection. Linked project instructions and current executor settings still apply.
+Goal context uses a committed v1 handoff as the semantic checkpoint and considers only authored
+delta after the exact durable resume-bootstrap sequence. Aborted/stale handoffs are not
+checkpoints. A source reply obligation is durably handled once newer authored/tool activity
+makes that stable final historical; replacement pages and the watchdog may not resurrect it.
 
 Legacy shadow repair requires exact old continuation proof. It may repair missing projections;
 it must not guess a new rebind, delete history or become the path for new continuations.
@@ -1243,13 +1254,21 @@ execution succeeded. Secrets remain in the main process's encrypted store. Custo
 receive the explicitly assembled reference context; local recording is not a promise that
 Goal API requests stay on the device.
 
-The driver context includes canonical authored user messages, stable assistant interim/progress
-and final text. Tool rows are opt-in (`includeToolCalls`, default Off); finish-control calls do
-not recursively dominate the reference. Preserve original task/steering and committed handoff
-provenance under the message budget. Helper prefix digests prove whether a bounded delta is
-valid; changed history/instructions replace context in the same helper instead of spawning
-another helper automatically. Clear temporary-planner answer content before durable state
-publication; it is not a normal recorded executor task.
+Before the first semantic checkpoint, the driver context includes canonical authored user
+messages, stable assistant interim/progress and final text. Tool rows are opt-in
+(`includeToolCalls`, default Off); finish-control calls do not recursively dominate the
+reference. After a committed `CONTINUATION WORKING SET v1`, that packet becomes Goal's resolved
+working state and only rows after the exact resume-bootstrap sequence are the delta. Do not
+replay pre-compaction transcript just to re-derive contract, root cause, rejected paths or
+implementation ownership already compiled into the packet. Newer user corrections/evidence may
+override the checkpoint; otherwise continue from it.
+
+Helper prefix digests still prove whether a bounded browser-helper delta is valid; changed
+history/instructions replace context in the same helper instead of spawning another helper
+automatically. The working-set projection is allowed a larger per-message budget than ordinary
+chat rows so rich operational state survives, while the browser transport keeps its hard authored
+message cap. Clear temporary-planner answer content before durable state publication; it is not
+a normal recorded executor task.
 
 Provider progress updates one existing timeline row and is never sendable text. Validate the
 final bounded decision schema before publication. Goal may return stop/no reply. Loop may also

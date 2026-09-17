@@ -1769,22 +1769,24 @@ describe('handoff storage', () => {
     expect(chunkText('short brief', 1000)).toEqual(['short brief']);
   });
 
-  it('asks for user-authoritative handoffs up to the documented 30k-token ceiling', () => {
+  it('asks for an executable semantic working set instead of a transcript digest', () => {
     const prompt = nativeHandoffPrompt();
     expect(prompt).toContain(HANDOFF_BRIEF_RULES);
     expect(prompt).toMatch(/user's messages as the highest-authority source/i);
-    expect(prompt).toMatch(/10,000[–-]30,000 tokens/i);
-    expect(prompt).toMatch(/~6,000-token brief is normally too short/i);
-    expect(prompt).toMatch(/Never exceed 30,000 tokens/i);
-    expect(prompt).toMatch(/lossless operational compression/i);
-    expect(prompt).toMatch(/failure.*root cause.*change.*verification/i);
-    expect(prompt).toMatch(/PLANNED \/ DECIDED/i);
-    expect(prompt).toMatch(/FAILED \/ UNRESOLVED/i);
-    expect(prompt).toMatch(/VERIFICATION/i);
-    expect(prompt).toMatch(/completed and verified/i);
+    expect(prompt).toContain('CONTINUATION WORKING SET v1');
+    expect(prompt).toMatch(/3,000[–-]12,000 tokens/i);
+    expect(prompt).toMatch(/never exceed 20,000 tokens/i);
+    expect(prompt).toMatch(/not writing a chat summary or a transcript digest/i);
+    expect(prompt).toMatch(/should not need to rescan the repository/i);
+    expect(prompt).toMatch(/RESOLVED REASONING/i);
+    expect(prompt).toMatch(/IMPLEMENTATION MAP/i);
+    expect(prompt).toMatch(/EVIDENCE INDEX/i);
+    expect(prompt).toMatch(/NEXT ACTION/i);
+    expect(prompt).toMatch(/DO NOT REDO/i);
+    expect(prompt).toMatch(/do not narrate the conversation turn by turn/i);
   });
 
-  it('honors the tool-detail setting in the handoff brief without claiming to erase seen history', () => {
+  it('honors the tool-detail setting in the continuation working set without claiming to erase seen history', () => {
     expect(nativeHandoffPrompt('token', false)).toContain('omit raw tool-call arguments and result bodies');
     expect(nativeHandoffPrompt('token', false)).toContain('not the history you already saw');
     expect(nativeHandoffPrompt('token', true)).not.toContain('omit raw tool-call arguments');

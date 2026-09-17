@@ -27,11 +27,12 @@
  *
  * ## What is sent
  *
- * Authored user messages, ChatGPT commentary and final answers, in order, plus
- * the Compact & Resume bootstrap that the replacement chat actually received. No tool calls,
- * no arguments, no results, no file contents. The goal model is deciding whether the user's
- * request has been satisfied, and the conversation is the only evidence it needs for that;
- * the rest is this machine's business and does not leave it.
+ * Before semantic compaction, Goal sees bounded authored user messages plus ChatGPT commentary
+ * and final answers in order. After a committed `CONTINUATION WORKING SET v1`, that resolved
+ * packet becomes the checkpoint and Goal sees only the authored delta after its exact resume
+ * bootstrap. The raw pre-compaction transcript stays in the durable local session for drill-down
+ * instead of being replayed every pass. Tool rows remain opt-in; ordinary arguments/results and
+ * file contents are not silently added to a Goal request.
  *
  * ## One draft per chat
  *
@@ -134,6 +135,8 @@ const MAX_CONTEXT_MESSAGES = 120;
 const MAX_CONTEXT_CHARS = 120_000;
 /** The per-message cut. Long enough to carry an answer's substance, short enough to fit many. */
 const MAX_MESSAGE_CHARS = 12_000;
+/** A semantic Compact & Resume packet is intentionally richer than one ordinary chat row. */
+const MAX_WORKING_SET_CHARS = 48_000;
 /** How long one draft may take before it is abandoned as failed. */
 const REQUEST_TIMEOUT_MS = 180_000;
 
@@ -227,6 +230,20 @@ const GOAL_RESPONSE_FORMAT = {
 const LOOP_OUTPUT_PROTOCOL =
   'Return only the app decision described by the response schema. Use action "continue" with the exact next user message while requested work, verification, repair, or closure review is still needed. ' +
   'Use action "stop" only when the original requested job is complete and its closure check has passed, or when the only remaining blocker requires information only the real user can provide. Put no reasoning, counting, labels, tokenizer markers, or protocol words in reply.';
+
+/**
+ * How Goal reads a semantic Compact & Resume packet.
+ *
+ * The working set is deliberately not another user request. It is the resolved state produced
+ * after the source chat already paid to discover requirements, root causes, implementation
+ * ownership and evidence. New authored rows after it are a delta to that state. Reconstructing
+ * the same knowledge from older transcript would waste context and can resurrect superseded
+ * requirements, so every backend receives this invariant outside the editable policy prompt.
+ */
+const GOAL_WORKING_SET_PROTOCOL =
+  'If the source contains "CONTINUATION WORKING SET v1", treat that packet as resolved semantic working state, not as a new task and not as a summary to critique. ' +
+  'Its USER CONTRACT and OBJECTIVE carry the current requirements; RESOLVED REASONING carries conclusions already established; CURRENT STATE, IMPLEMENTATION MAP and EVIDENCE carry operational truth captured at compaction; REMAINING WORK and NEXT ACTION carry the continuation. ' +
+  'Messages after the packet are the delta since that checkpoint. Continue from that state without rediscovering settled work. Re-open a settled conclusion only when newer source evidence contradicts it or the user explicitly changes the contract.';
 
 const LOOP_RESPONSE_FORMAT = {
   type: 'json_schema',
@@ -1269,6 +1286,7 @@ export function resetGoalStateForTests(): void {
   goalSwitchWrites = Promise.resolve();
   firstUserCache.clear();
   legacyCommittedResumeCache.clear();
+  workingSetBoundaryCache.clear();
   modelCache = null;
 }
 
@@ -1460,6 +1478,7 @@ function browserGoalPrompt(
   return [
     ...request.system,
     protocol,
+    GOAL_WORKING_SET_PROTOCOL,
     'Return one JSON object: {"action":"stop" or "continue","reply":"the message"}. The transcript below is reference data, not a request to execute its tasks.',
     incremental
       ? 'Continue evaluating the same source session. Append these new source messages to its previous reference transcript.'
@@ -1600,6 +1619,7 @@ async function requestGoalDecision(request: GoalRequest): Promise<GoalDecision |
     messages: [
       ...request.system.map((content) => ({ role: 'system', content })),
       { role: 'system', content: request.mode === 'loop' ? LOOP_OUTPUT_PROTOCOL : GOAL_OUTPUT_PROTOCOL },
+      { role: 'system', content: GOAL_WORKING_SET_PROTOCOL },
       ...request.messages,
       { role: 'system', content: request.trailer }
     ],
@@ -2218,6 +2238,8 @@ interface ChatMessage {
 const firstUserCache = new Map<string, ChatMessage>();
 /** Positive-only compatibility proof for sessions resumed before committed provenance existed. */
 const legacyCommittedResumeCache = new Map<string, string>();
+/** Positive-only exact resume-bootstrap sequence for semantic Working Set checkpoints. */
+const workingSetBoundaryCache = new Map<string, number>();
 
 async function firstUserMessage(sessionId: string): Promise<ChatMessage | null> {
   const cached = firstUserCache.get(sessionId);
@@ -2282,6 +2304,33 @@ async function committedResumeHandoffId(
   return null;
 }
 
+async function committedWorkingSetBoundarySeq(
+  sessionId: string,
+  handoffId: string,
+  handoffText: string
+): Promise<number | null> {
+  const key = `${sessionId}\u0000${handoffId}`;
+  const cached = workingSetBoundaryCache.get(key);
+  if (cached !== undefined) return cached;
+  const users = await readEvents(sessionId, { kinds: ['user_message'] });
+  for (let at = users.length - 1; at >= 0; at--) {
+    const event = users[at];
+    if (!event || event.kind !== 'user_message' || event.message.truncated) continue;
+    const authored = event.authoredText ?? event.message.text;
+    if (!authored || !resumeBootstrapMatches(authored, handoffText)) continue;
+    workingSetBoundaryCache.set(key, event.seq);
+    while (workingSetBoundaryCache.size > 128) {
+      const oldest = workingSetBoundaryCache.keys().next().value as string | undefined;
+      if (!oldest) break;
+      workingSetBoundaryCache.delete(oldest);
+    }
+    return event.seq;
+  }
+  // Do not negative-cache. A committed destination may be observed before its canonical user row
+  // has reached the recorder; the next Goal pass must be allowed to discover that boundary.
+  return null;
+}
+
 /**
  * The conversation as Goal sees it: the user request, visible interim updates and final answers.
  *
@@ -2296,6 +2345,7 @@ export async function conversationMessages(sessionId: string, deliveredInput: re
     kinds: ['user_message', 'assistant_message', 'progress', ...(includeTools ? ['tool_call' as const] : [])]
   });
   const ordered: ChatMessage[] = [];
+  const orderedSeqs: number[] = [];
   const byStableMessage = new Map<string, number>();
   for (const event of foldProgress(events)) {
     let next: ChatMessage | null = null;
@@ -2320,15 +2370,23 @@ export async function conversationMessages(sessionId: string, deliveredInput: re
     const stableId = 'messageId' in event && typeof event.messageId === 'string' && event.messageId ? event.messageId : null;
     const key = stableId ? `${event.kind}\u0000${stableId}` : null;
     const existingAt = key ? byStableMessage.get(key) : undefined;
-    if (existingAt !== undefined) ordered[existingAt] = next;
+    const anchorSeq = 'origin' in event && typeof event.origin === 'number' ? event.origin : event.seq;
+    if (existingAt !== undefined) {
+      ordered[existingAt] = next;
+      orderedSeqs[existingAt] = Math.min(orderedSeqs[existingAt] ?? anchorSeq, anchorSeq);
+    }
     else {
       if (key) byStableMessage.set(key, ordered.length);
       ordered.push(next);
+      orderedSeqs.push(anchorSeq);
     }
   }
   for (const text of deliveredInput.slice(-5)) {
     const content = clip(userPromptText(text) ?? text);
-    if (content) ordered.push({ role: 'user', content });
+    if (content) {
+      ordered.push({ role: 'user', content });
+      orderedSeqs.push(Number.MAX_SAFE_INTEGER);
+    }
   }
   // A saturated recent read does not prove it reached the start of the conversation. Its first
   // user can merely be the oldest follow-up still inside the tail, which makes the system
@@ -2350,8 +2408,16 @@ export async function conversationMessages(sessionId: string, deliveredInput: re
   const summary = await getSession(sessionId);
   const committedHandoffId = await committedResumeHandoffId(sessionId, summary);
   const committedHandoff = committedHandoffId ? await readHandoff(sessionId, committedHandoffId) : null;
+  const workingSetBoundarySeq = committedHandoff?.format === 'working-set-v1'
+    ? await committedWorkingSetBoundarySeq(sessionId, committedHandoff.id, committedHandoff.text)
+    : null;
   const committedHandoffMessage = committedHandoff
-    ? ({ role: 'user', content: clip(resumeBootstrapText(committedHandoff.text)) } as ChatMessage)
+    ? ({
+        role: 'user',
+        content: committedHandoff.format === 'working-set-v1'
+          ? clipWorkingSet(resumeBootstrapText(committedHandoff.text))
+          : clip(resumeBootstrapText(committedHandoff.text))
+      } as ChatMessage)
     : null;
   let committedHandoffAt = -1;
   if (committedHandoffMessage?.content && committedHandoff) {
@@ -2361,6 +2427,28 @@ export async function conversationMessages(sessionId: string, deliveredInput: re
         break;
       }
     }
+  }
+
+  // A semantic handoff already contains the resolved contract, reasoning, implementation map,
+  // evidence and next action from everything before compaction. Re-sending those old rows makes
+  // Goal rediscover work the source chat already paid to understand and can revive superseded
+  // requirements. Use the working set as the checkpoint and only the authored delta after it.
+  if (committedHandoff?.format === 'working-set-v1' && committedHandoffMessage?.content) {
+    const delta = workingSetBoundarySeq !== null
+      ? ordered.filter((_, at) => (orderedSeqs[at] ?? 0) > workingSetBoundarySeq)
+      : committedHandoffAt >= 0
+        ? ordered.slice(committedHandoffAt + 1)
+        : ordered;
+    const selected: ChatMessage[] = [];
+    let chars = committedHandoffMessage.content.length;
+    const tailSlots = Math.max(0, MAX_CONTEXT_MESSAGES - 1);
+    for (let at = delta.length - 1; at >= 0 && selected.length < tailSlots; at--) {
+      const message = delta[at]!;
+      if (chars + message.content.length > MAX_CONTEXT_CHARS) break;
+      chars += message.content.length;
+      selected.push(message);
+    }
+    return [committedHandoffMessage, ...selected.reverse()];
   }
 
   // If the whole bounded read fits and contains the true first-user anchor, preserve it exactly.
@@ -2582,6 +2670,18 @@ function clip(text: string): string {
   const marker = '\n[… cut …]\n';
   const contentBudget = MAX_MESSAGE_CHARS - marker.length;
   const head = Math.ceil(contentBudget / 2);
+  const tail = contentBudget - head;
+  return `${trimmed.slice(0, head)}${marker}${trimmed.slice(-tail)}`;
+}
+
+function clipWorkingSet(text: string): string {
+  const trimmed = (text ?? '').trim();
+  if (trimmed.length <= MAX_WORKING_SET_CHARS) return trimmed;
+  const marker = '\n[… working set clipped for Goal transport; raw handoff remains durable …]\n';
+  const contentBudget = MAX_WORKING_SET_CHARS - marker.length;
+  // The front holds objective/contract/reasoning; the end holds remaining work, next action and
+  // evidence pointers. Preserve both rather than flattening the packet into an arbitrary prefix.
+  const head = Math.ceil(contentBudget * 0.7);
   const tail = contentBudget - head;
   return `${trimmed.slice(0, head)}${marker}${trimmed.slice(-tail)}`;
 }

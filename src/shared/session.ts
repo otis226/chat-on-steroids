@@ -546,6 +546,8 @@ export interface Handoff {
   id: string;
   sessionId: string;
   createdAt: number;
+  /** Semantic continuation packet emitted by the v1 working-set compiler prompt. */
+  format?: 'working-set-v1';
   /** The continuation brief itself. */
   text: string;
   /** How the raw session looked when this was made, for honest staleness reporting. */

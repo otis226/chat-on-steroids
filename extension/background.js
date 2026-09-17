@@ -40,7 +40,7 @@ const MODEL_REQUEST_TIMEOUT_MS = 190_000;
 /** The reason a deadline aborts with, so it is a fact the caller can act on rather than prose. */
 const TIMED_OUT = 'the app took too long to answer';
 /** Bumped only when the request/response shape changes; the app compares it. */
-const BRIDGE_PROTOCOL = 13;
+const BRIDGE_PROTOCOL = 14;
 
 /**
  * Journal caps. The byte figure is what actually matters — chrome.storage.session has a
@@ -197,6 +197,13 @@ let ackingCommands = false;
  * open. `chrome.tabs.onRemoved` wakes it again and can then retire the right conversation.
  */
 let tabConversations = {};
+/**
+ * Last browser-proven scope for each conversation.
+ *
+ * false means a concrete plain /c/<id> route; a g-p-* string means a concrete Project route.
+ * Missing means unknown, and recovery must fail closed rather than guessing a URL.
+ */
+let conversationProjects = {};
 /** Browser-supplied document owner for each tab, plus bounded retired owners. */
 let tabDocuments = {};
 /** Highest same-document SPA navigation generation accepted for each tab. */
@@ -251,7 +258,7 @@ function load() {
 }
 
 async function loadOnce() {
-  const stored = await chrome.storage.local.get(['port', 'token', 'disconnected', 'deferredRevivals', 'commandAckOutbox', 'inputOpenings', 'desktopInputTabs', 'stopOpenings']);
+  const stored = await chrome.storage.local.get(['port', 'token', 'disconnected', 'deferredRevivals', 'commandAckOutbox', 'inputOpenings', 'desktopInputTabs', 'stopOpenings', 'conversationProjects']);
   port = typeof stored.port === 'number' ? stored.port : null;
   token = typeof stored.token === 'string' ? stored.token : null;
   // Deliberately in `local` rather than `session`: a choice to disconnect that a browser
@@ -266,6 +273,11 @@ async function loadOnce() {
       (row.tab === null || Number.isInteger(row.tab)) && cleanConversationId(row.conversationId) &&
       typeof row.turnId === 'string' && row.turnId.length > 0 && row.turnId.length <= 256 &&
       Number.isFinite(row.expiresAt) && row.expiresAt > Date.now()).slice(-1000)) : {};
+  conversationProjects = stored.conversationProjects && typeof stored.conversationProjects === 'object' && !Array.isArray(stored.conversationProjects)
+    ? Object.fromEntries(Object.entries(stored.conversationProjects).filter(([conversationId, project]) =>
+      cleanConversationId(conversationId) && (project === false || (typeof project === 'string' && /^g-p-[0-9a-f]{32}$/.test(project)))
+    ).slice(-1000))
+    : {};
   const live = await chrome.storage.session.get([
     'settled',
     'journal',
@@ -343,7 +355,8 @@ function persistLive() {
         commandAckOutbox: commandAckOutbox.slice(-200),
         inputOpenings,
         stopOpenings,
-        deferredRevivals: deferredRevivals.slice(-100)
+        deferredRevivals: deferredRevivals.slice(-100),
+        conversationProjects
       })
     ])
   );
@@ -1670,7 +1683,14 @@ async function noteTabConversation(source, value) {
   if (id === null || !conversationId) return false;
   if (!ownsDocument(source)) return false;
   const key = String(id);
-  if (tabConversations[key] === conversationId) return false;
+  let scopeChanged = false;
+  try {
+    const tab = await chrome.tabs.get(id);
+    scopeChanged = rememberConversationProject(tab, conversationId);
+  } catch {
+    // Scope remains whatever the last concrete route proved.
+  }
+  if (tabConversations[key] === conversationId && !scopeChanged) return false;
   const previous = cleanConversationId(tabConversations[key]);
   tabConversations[key] = conversationId;
   await persistLive();
@@ -1685,6 +1705,31 @@ async function noteTabConversation(source, value) {
     await drainCloses();
   }
   return true;
+}
+
+function rememberConversationProject(tab, conversationId) {
+  const id = cleanConversationId(conversationId);
+  if (!id || !tab) return false;
+  const concrete = [tab.url, tab.pendingUrl].find((value) => conversationFromUrl(value) === id);
+  if (!concrete) return false;
+  const project = projectFromUrl(concrete);
+  const next = project || false;
+  if (conversationProjects[id] === next) return false;
+  delete conversationProjects[id];
+  conversationProjects[id] = next;
+  while (Object.keys(conversationProjects).length > 1000) delete conversationProjects[Object.keys(conversationProjects)[0]];
+  return true;
+}
+
+function recoveryConversationUrl(conversationId) {
+  const id = cleanConversationId(conversationId);
+  if (!id || !Object.prototype.hasOwnProperty.call(conversationProjects, id)) return null;
+  const project = conversationProjects[id];
+  if (project === false) return `https://chatgpt.com/c/${encodeURIComponent(id)}`;
+  if (typeof project === 'string' && /^g-p-[0-9a-f]{32}$/.test(project)) {
+    return `https://chatgpt.com/g/${project}/c/${encodeURIComponent(id)}`;
+  }
+  return null;
 }
 
 /**
@@ -2434,7 +2479,12 @@ async function performBrowserRepairs(repairs, policy) {
       if (target) await chrome.tabs.reload(target.id);
       else {
         if (policy.browserOnly === true) continue;
-        await createChatTab(`https://chatgpt.com/c/${encodeURIComponent(conversationId)}`, policy.background === true, focus);
+        const url = recoveryConversationUrl(conversationId);
+        if (!url) {
+          await call(`/status?repaired=${encodeURIComponent(token)}&repairAction=skipped`);
+          continue;
+        }
+        await createChatTab(url, policy.background === true, focus);
       }
     } catch {
       // A tab changed between the scan and action, or Chrome refused it. Report the exact failed
@@ -3401,6 +3451,15 @@ function conversationForTab(tab) {
   if (pending) return pending;
   const urls = [tab.url, tab.pendingUrl].filter((value) => typeof value === 'string' && value);
   if (urls.some((value) => !isChatGptUrl(value))) return null;
+  // A settled ChatGPT route with no conversation id is concrete navigation away from the chat,
+  // not a transient blank during reload. Project home was previously accepted from the stale
+  // tab registry here, so recovery believed the wrong page was still the exact conversation.
+  if (tab.status === 'complete' && typeof tab.url === 'string' && isChatGptUrl(tab.url) && !conversationFromUrl(tab.url)) {
+    return null;
+  }
+  if (typeof tab.pendingUrl === 'string' && isChatGptUrl(tab.pendingUrl) && !conversationFromUrl(tab.pendingUrl)) {
+    return null;
+  }
   return cleanConversationId(tabConversations[String(tab.id)]);
 }
 

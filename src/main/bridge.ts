@@ -1466,7 +1466,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const repaired = url.searchParams.get('repaired');
     const repairFailed = url.searchParams.get('repairFailed');
     const repairAction = url.searchParams.get('repairAction');
-    const action = repairAction === 'reloaded' || repairAction === 'reopened' ? repairAction : null;
+    const action = repairAction === 'reloaded' || repairAction === 'reopened' || repairAction === 'skipped' ? repairAction : null;
     if (repaired) {
       await confirmRepair(repaired.slice(0, 64), action);
     } else if (repairFailed) {
@@ -6726,11 +6726,19 @@ async function takePendingRepairs(
  * this app is no longer waiting on - an older turn's, or one already re-queued - matches
  * nothing and closes nothing, which is the only safe reading of it.
  */
-async function confirmRepair(token: string, action: 'reloaded' | 'reopened' | null): Promise<void> {
+async function confirmRepair(token: string, action: 'reloaded' | 'reopened' | 'skipped' | null): Promise<void> {
   for (const [conversationId, repair] of repairsInFlight) {
     if (repair.state === 'handed' && repair.token === token) {
       repair.state = 'done';
       lastBrowserRecoveryAt.set(conversationId, Date.now());
+      if (action === 'skipped') {
+        await updateRepairProgress(
+          conversationId,
+          repair,
+          `Did not reopen chat while recovering ${repairReason(repair)} because its exact plain/Project route was not proven.`
+        );
+        return;
+      }
       awaitingReturn.add(conversationId);
       if (repair.reason === 'silence') {
         // The reload is the chat's chance, so the verdict on it waits — not the next maintenance

@@ -66,4 +66,7 @@ export function extensionDownloadUrl(version = APP_VERSION): string {
  */
 // 13 — native file attachments require exact claimed-input chunk delivery and final
 // draft ownership. A 12 companion would silently send text without these files.
-export const BRIDGE_PROTOCOL = 13;
+// 14 — browser-repair receipts can explicitly retire an unsafe route guess. The extension also
+// persists exact plain/Project conversation scope so a missing Project tab is reopened at
+// /g/<project>/c/<conversation> instead of falling into Project home.
+export const BRIDGE_PROTOCOL = 14;

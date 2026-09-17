@@ -68,4 +68,7 @@ export function extensionDownloadUrl(version = APP_VERSION): string {
 // draft ownership. A 12 companion would silently send text without these files.
 // 14 — exact native generated-image metadata and bounded preview observations. A 13 app
 // would ACK the journal while silently discarding that new event kind.
-export const BRIDGE_PROTOCOL = 14;
+// 15 — browser-repair receipts can explicitly retire an unsafe route guess, and the extension
+// persists exact plain/Project conversation scope before reopening a missing chat. A 14 peer
+// would silently guess `/c/<id>` and could reopen a Project conversation in the wrong namespace.
+export const BRIDGE_PROTOCOL = 15;

@@ -39,8 +39,8 @@ describe('extension release metadata', () => {
     expect(lock.version).toBe(APP_VERSION);
     expect(lock.packages?.['']?.version).toBe(APP_VERSION);
     expect(manifest.version).toBe(APP_VERSION);
-    expect(BRIDGE_PROTOCOL).toBe(14);
-    expect(backgroundSource).toContain('const BRIDGE_PROTOCOL = 14;');
+    expect(BRIDGE_PROTOCOL).toBe(15);
+    expect(backgroundSource).toContain('const BRIDGE_PROTOCOL = 15;');
   });
 
   /**
@@ -963,7 +963,11 @@ describe('exact chat recovery from a fresh Chrome tab scan', () => {
   /** A missing exact chat is opened once after the same fresh scan that prevents duplicates. */
   it('opens the exact chat when the scan proves this browser is not holding it', async () => {
     const { fetch, asked, actions } = appWith(OTHER);
-    const worker = loadWorker({ local: new FakeStorageArea(paired), session: new FakeStorageArea(), fetch });
+    const worker = loadWorker({
+      local: new FakeStorageArea({ ...paired, conversationProjects: { [OTHER]: false } }),
+      session: new FakeStorageArea(),
+      fetch
+    });
     await worker.registerTab(41);
     await worker.send({ type: 'bind', conversationId: CHAT }, 41);
 
@@ -996,7 +1000,11 @@ describe('exact chat recovery from a fresh Chrome tab scan', () => {
       }
       return response(404, {});
     });
-    const worker = loadWorker({ local: new FakeStorageArea(paired), session: new FakeStorageArea(), fetch });
+    const worker = loadWorker({
+      local: new FakeStorageArea({ ...paired, conversationProjects: { [OTHER]: false } }),
+      session: new FakeStorageArea(),
+      fetch
+    });
     await worker.registerTab(51);
     await worker.send({ type: 'bind', conversationId: CHAT }, 51);
 
@@ -1036,7 +1044,11 @@ describe('exact chat recovery from a fresh Chrome tab scan', () => {
       }
       return response(404, {});
     });
-    const worker = loadWorker({ local: new FakeStorageArea(paired), session: new FakeStorageArea(), fetch });
+    const worker = loadWorker({
+      local: new FakeStorageArea({ ...paired, conversationProjects: { [CHAT]: false } }),
+      session: new FakeStorageArea(),
+      fetch
+    });
     await worker.registerTab(71);
     await worker.send({ type: 'bind', conversationId: CHAT }, 71);
 
@@ -1048,6 +1060,32 @@ describe('exact chat recovery from a fresh Chrome tab scan', () => {
     expect(asked.filter((item) => item !== 'status')).toEqual(['repaired:close-repair']);
     expect(asked[0]).toBe('status');
     expect(worker.alarmClear).not.toHaveBeenCalled();
+  });
+
+  it('retires an unproven reopen instead of guessing plain-vs-Project routing', async () => {
+    const { fetch, asked, actions } = appWith(OTHER);
+    const worker = loadWorker({ local: new FakeStorageArea(paired), session: new FakeStorageArea(), fetch });
+    await worker.fireAlarm();
+    expect(worker.tabsCreate).not.toHaveBeenCalled();
+    expect(worker.tabsReload).not.toHaveBeenCalled();
+    expect(asked).toEqual(['status', `repaired:${OTHER}`]);
+    expect(actions).toEqual(['skipped']);
+  });
+
+  it('reopens a proven Project conversation inside its exact Project route', async () => {
+    const PROJECT = 'g-p-0123456789abcdef0123456789abcdef';
+    const { fetch, actions } = appWith(OTHER);
+    const worker = loadWorker({
+      local: new FakeStorageArea({ ...paired, conversationProjects: { [OTHER]: PROJECT } }),
+      session: new FakeStorageArea(),
+      fetch
+    });
+    await worker.fireAlarm();
+    expect(worker.tabsCreate).toHaveBeenCalledWith({
+      url: `https://chatgpt.com/g/${PROJECT}/c/${OTHER}`,
+      active: false
+    });
+    expect(actions).toEqual(['reopened']);
   });
 
   /**

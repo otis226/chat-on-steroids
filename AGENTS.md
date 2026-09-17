@@ -1844,6 +1844,20 @@ immediately retires its exact tab after fresh document/epoch, idle, pin and draf
 does not wait for a replacement tab. Historical helper role fences remain valid. Clear temporary
 answer content before durable state publication; it is not a normal recorded executor task.
 
+New Compact & Resume checkpoints emit a `CONTINUATION WORKING SET v1`, not a transcript digest.
+The source chat compiles the current user contract, resolved root-cause/architecture reasoning,
+implementation ownership, candidate/runtime state, still-valid evidence, remaining work and one
+executable next action. Chronology, repeated status prose and raw tool logs remain available in the
+durable local session instead of becoming default successor context. Legacy briefs remain readable.
+A v1 working set is structurally validated and bounded for one authored replacement-chat message.
+
+Once a v1 handoff is durably committed, Goal/Loop treats it as the semantic checkpoint and sends
+only authored delta after the exact resume bootstrap. It must not replay the pre-compaction
+transcript merely to rediscover requirements, rejected paths or reasoning already resolved in the
+working set. Newer user corrections or evidence may override the checkpoint; otherwise the helper
+continues from `NEXT ACTION`. The working-set projection has a larger per-message allowance than
+ordinary chat rows while retaining the existing whole-context and browser transport limits.
+
 The app's existing Goal/Loop composer row shows answer settling and real waiting reasons before
 a draft exists, then the generated continuation text and delivery state. Both app controls and
 the extension project the same pending reply and activity/listening deadlines. Display countdowns

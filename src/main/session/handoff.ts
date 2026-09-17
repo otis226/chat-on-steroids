@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import type { Handoff } from '../../shared/session.js';
 import { logInfo } from '../logger.js';
 import { getSession, readSessionPlan, saveHandoff } from './store.js';
-import { destinationContinuationMarker } from './handoff-prompt.js';
+import { destinationContinuationMarker, WORKING_SET_MARKER } from './handoff-prompt.js';
 import { userPromptText } from '../../shared/user-prompt.js';
 
 export interface PrepareHandoffInput {
@@ -39,10 +39,12 @@ export function handoffPlanNotice(sessionId: string): string {
  */
 export function resumeBootstrapText(summary: string, token = ''): string {
   const identity = destinationContinuationMarker(token);
+  const semantic = summary.trimStart().startsWith(WORKING_SET_MARKER);
   return (
     (identity ? `${identity}\n\n` : '') +
-    'Continuing a Chat On Steroids session that was compacted. This is the brief the previous chat wrote about ' +
-    'its own work; carry on from it rather than starting again.\n\n' +
+    (semantic
+      ? 'Continuing a Chat On Steroids session that was compacted. The packet below is the resolved continuation working set from the previous chat: current user contract, reasoning already established, exact operational state, valid evidence, and the next executable action. Treat it as the default working state and continue from NEXT ACTION without rediscovering settled work. Use its evidence pointers only when a detail needs revalidation.\n\n'
+      : 'Continuing a Chat On Steroids session that was compacted. This is the brief the previous chat wrote about its own work; carry on from it rather than starting again.\n\n') +
     summary
   );
 }
@@ -67,7 +69,8 @@ export function resumeBootstrapMatches(recorded: string, summary: string): boole
 /**
  * The shortest a brief may be before it is refused, for any session at all.
  *
- * Far below what the brief rules ask for — they target 10,000-30,000 tokens — because this
+ * Far below what the working-set rules normally ask for — roughly 3,000-12,000 tokens when
+ * substantial state warrants it — because this
  * is not a quality bar. It is the line under which a document cannot be a handoff of
  * anything, whatever the session held.
  */
@@ -76,6 +79,20 @@ const MIN_BRIEF_CHARS = 200;
 const SUBSTANTIAL_SESSION_TOKENS = 20_000;
 /** The floor that applies to those sessions. Still roughly a fortieth of the target. */
 const MIN_SUBSTANTIAL_BRIEF_CHARS = 1_000;
+/** Keeps a semantic working set plus the resume wrapper under the browser's authored-message cap. */
+const MAX_WORKING_SET_CHARS = 80_000;
+const WORKING_SET_HEADINGS = [
+  'OBJECTIVE',
+  'USER CONTRACT',
+  'RESOLVED REASONING',
+  'CURRENT STATE',
+  'IMPLEMENTATION MAP',
+  'EVIDENCE',
+  'REMAINING WORK',
+  'NEXT ACTION',
+  'EVIDENCE INDEX',
+  'DO NOT REDO'
+] as const;
 
 /**
  * Why this text cannot be the brief for this session, or null if it can.
@@ -100,6 +117,17 @@ export function briefShortfall(text: string, sourceTokens: number): string | nul
   }
   if (sourceTokens >= SUBSTANTIAL_SESSION_TOKENS && brief.length < MIN_SUBSTANTIAL_BRIEF_CHARS) {
     return `The brief is ${brief.length} characters for a session carrying about ${Math.round(sourceTokens / 1000)}k tokens of work, so it cannot be the whole handoff.`;
+  }
+  if (brief.startsWith(WORKING_SET_MARKER)) {
+    const canonical = brief.replace(/\r\n?/g, '\n');
+    if (brief.length > MAX_WORKING_SET_CHARS) {
+      return `The continuation working set is ${brief.length} characters, which is too large to transfer safely in one replacement-chat message.`;
+    }
+    for (const heading of WORKING_SET_HEADINGS) {
+      if (!new RegExp(`(?:^|\\n)${heading}(?:\\n|$)`).test(canonical)) {
+        return `The continuation working set is missing the required ${heading} section.`;
+      }
+    }
   }
   return null;
 }
@@ -136,6 +164,7 @@ export async function prepareHandoff(input: PrepareHandoffInput): Promise<Handof
     id: newHandoffId(),
     sessionId: input.sessionId,
     createdAt: Date.now(),
+    ...(text.startsWith(WORKING_SET_MARKER) ? { format: 'working-set-v1' as const } : {}),
     text: text + planNotice,
     sourceEvents: input.sourceEvents ?? summary.events,
     sourceTokens: input.sourceTokens ?? summary.estimatedTokens,

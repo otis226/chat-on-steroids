@@ -1762,7 +1762,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const repaired = url.searchParams.get('repaired');
     const repairFailed = url.searchParams.get('repairFailed');
     const repairAction = url.searchParams.get('repairAction');
-    const action = repairAction === 'reloaded' || repairAction === 'reopened' ? repairAction : null;
+    const action = repairAction === 'reloaded' || repairAction === 'reopened' || repairAction === 'skipped' ? repairAction : null;
     if (repaired) {
       await confirmRepair(repaired.slice(0, 64), action);
     } else if (repairFailed) {
@@ -7314,13 +7314,21 @@ function attributionRepairCurrent(repair: Repair, session: SessionSummary | null
  * this app is no longer waiting on - an older turn's, or one already re-queued - matches
  * nothing and closes nothing, which is the only safe reading of it.
  */
-async function confirmRepair(token: string, action: 'reloaded' | 'reopened' | null): Promise<void> {
+async function confirmRepair(token: string, action: 'reloaded' | 'reopened' | 'skipped' | null): Promise<void> {
   for (const [conversationId, repair] of repairsInFlight) {
     if (repair.state === 'handed' && repair.token === token) {
       repair.state = 'done';
       if (repair.attribution && repair.attribution.incident.firstAttemptAt === null)
         repair.attribution.incident.firstAttemptAt = Date.now();
       lastBrowserRecoveryAt.set(conversationId, Date.now());
+      if (action === 'skipped') {
+        await updateRepairProgress(
+          conversationId,
+          repair,
+          `Did not reopen chat while recovering ${repairReason(repair)} because its exact plain/Project route was not proven.`
+        );
+        return;
+      }
       awaitingReturn.add(conversationId);
       if (repair.reason === 'silence') {
         const failedGrant = activeUntil.get(conversationId);
@@ -7367,13 +7375,14 @@ async function confirmRepair(token: string, action: 'reloaded' | 'reopened' | nu
 }
 
 /** An exact browser action failed; keep the episode queued and replace its one debug row. */
-async function failRepairAttempt(token: string, action: 'reloaded' | 'reopened' | null): Promise<void> {
+async function failRepairAttempt(token: string, action: 'reloaded' | 'reopened' | 'skipped' | null): Promise<void> {
   for (const [conversationId, repair] of repairsInFlight) {
     if (repair.state !== 'handed' || repair.token !== token) continue;
+    const verb = action === 'reopened' ? 'Reopen' : action === 'skipped' ? 'Safe-route recovery' : 'Reload';
     await updateRepairProgress(
       conversationId,
       repair,
-      `${action === 'reopened' ? 'Reopen' : 'Reload'} failed while recovering ${repairReason(repair)}${repair.attribution ? '.' : '; will retry.'}`
+      `${verb} failed while recovering ${repairReason(repair)}${repair.attribution ? '.' : '; will retry.'}`
     );
     if (repairsInFlight.get(conversationId) !== repair) return;
     if (repair.reason === 'unattributed') repair.state = 'done';

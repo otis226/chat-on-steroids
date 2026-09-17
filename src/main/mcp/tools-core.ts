@@ -1,5 +1,6 @@
 import { toolDeclaration } from './tool-declarations.js';
 import { registerPlanTool } from './plan-tool.js';
+import { registerHarnessTool } from './harness-tool.js';
 import { goalWorkerChat } from '../bridge.js';
 import { announceSessionFinish, sessionFinishDeadline } from '../session/finish.js';
 import { getConfig } from '../config.js';
@@ -989,6 +990,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
   if (reg.sessionToolsExposed) {
     registerPlanTool(reg);
   }
+  registerHarnessTool(reg);
   if (reg.ctx.exposedFinishTool ?? getConfig().ui.finishTool === true) {
     reg.register('session_finish', toolDeclaration('session_finish', () => ({
       description: 'For Astra only, when explicitly requested by a user prompt. Call near actual completion, after implementing the requested work. Receives queued instructions; complete and verify them before calling again. Do not use for progress updates or queue collection. While HELD with no work remaining, call to wait. Each call waits at most 25 seconds.',

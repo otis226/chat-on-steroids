@@ -587,7 +587,7 @@ async function dispatchTracked(
   const finishDeadline = name === 'session_finish' ? sessionFinishDeadline(startedAt) : null;
   const identityWindow = (requested: number): number => finishDeadline === null
     ? requested : Math.min(requested, Math.max(0, finishDeadline - Date.now()));
-  if (!context.caller.conversationId && (desktopContext || name === 'exec' || name === 'update_plan' || name === 'session_finish' || (identitySensitive && swarmRunning())) && requestId) {
+  if (!context.caller.conversationId && (desktopContext || name === 'exec' || name === 'update_plan' || name === 'session_finish' || name === 'harness' || (identitySensitive && swarmRunning())) && requestId) {
     setCallerConversation(
       context,
       await awaitFreshCallOrigin(name, startedAt, identityWindow(name === 'session_finish' ? SPAWN_EVIDENCE_MS : IDENTITY_EVIDENCE_MS), { requestId })

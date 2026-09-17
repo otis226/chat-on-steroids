@@ -139,6 +139,13 @@ function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform, skills: s
     'Use action=message to steer a worker; batch messages when sending several. Worker reports arrive with tool results. Check their findings and changes before relying on them.',
     'Workers communicate with the prime, keep working while replies are pending, and use action=finish when done with RESULT / CHANGES / VALIDATION / BLOCKERS. A finished reusable worker sleeps and can be messaged again.'
   );
+  if (caps.command) lines.push(
+    '',
+    '# External coding harness',
+    'Use harness, not raw exec_command, to run a coherent slice of work in an external coding harness (Codex Desktop or Claude Code) that should keep its own conversation across multiple turns. Pick a workstream key per independent piece of work; action=start creates one new binding, then action=continue with that same key sends later work to the exact same external conversation. A different key starts an independent one — never invent or reuse a key from another task.',
+    'kind=codex binds a thread in the Codex Desktop app itself, routed through OpenCodex; it requires a matching local Codex Desktop project and can come back pending if Codex Desktop has not finished creating the thread yet. kind=claude first creates a normal history/resume-visible Claude Code CLI session, then runs the task by resuming that exact UUID in background mode with Remote Control; transcript/job persistence alone is not accepted visibility.',
+    'Use action=status/list to check progress instead of guessing; action=continue to send the next instruction into the same binding; action=detach only to drop this app’s own record of a binding, never to end the external session itself. A claude continue is refused, not failed, while that exact session is still mid-turn — check status and retry shortly rather than treating it as broken. Only fall back to exec_command against these tools directly for diagnostics or recovery, not as the normal way to drive them.'
+  );
   if (ctx.exposedFinishTool ?? config.ui.finishTool) lines.push(
     '',
     'session_finish is for Astra only when the user prompt explicitly requests it. Follow that prompt’s finish timing after implementation; complete newly delivered work. It is not a plan/progress update or a way to collect queued tasks. Workers use agents action=finish instead.'

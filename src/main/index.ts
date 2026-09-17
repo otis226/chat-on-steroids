@@ -44,6 +44,7 @@ import {
 import { flushDurable, initDurableStore, readDurable, writeDurableNow, writeDurableSoon } from './durable.js';
 import { restoreRequestCorrelations } from './session/correlation.js';
 import { restoreBlockedChats } from './session/blocked-chats.js';
+import { restoreHarnessBindings } from './harness/store.js';
 import { stopComputerHelper } from './computer/index.js';
 import {
   GOAL_OBJECTIVES_STATE,
@@ -333,6 +334,11 @@ void app.whenReady().then(async () => {
   // And the user's blocks, for the same reason: a chat blocked yesterday is still the rogue
   // turn today, and a block that loads after the first call is a tool the turn already got.
   await restoreBlockedChats();
+  if (windowActivation.isDisabled()) return;
+  // External harness bindings (Codex Desktop / Claude Code): same durability contract as the
+  // blocks above — a launching/active binding recorded yesterday still owns its external
+  // conversation today, and `harness` must never reconstruct that ownership from a guess.
+  await restoreHarnessBindings();
   if (windowActivation.isDisabled()) return;
   setAgentConversationLookup(agentConversation);
   // The prime's chat is the user's own, so no extension report can name it. It is bound

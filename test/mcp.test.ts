@@ -594,7 +594,7 @@ describe('surface boundaries', () => {
     everything();
     const names = toolNames(await core('tools/list'));
     // find is absent because exec_command is present — they are mutually exclusive.
-    expect(names).toEqual(['agents', 'apply_patch', 'exec', 'exec_command', 'read', 'update_plan', 'view_image', 'write_stdin']);
+    expect(names).toEqual(['agents', 'apply_patch', 'exec', 'exec_command', 'harness', 'read', 'update_plan', 'view_image', 'write_stdin']);
     for (const name of surfaceDefinition('desktop').tools.filter(name => name !== 'exec')) expect(names, name).not.toContain(name);
   });
 
@@ -808,8 +808,8 @@ describe('surface boundaries', () => {
     const coreTools = toolList(await core('tools/list'));
     const desktopTools = toolList(await desktop('tools/list'));
 
-    // Each populated surface includes code mode; find and the shell exec pair remain exclusive.
-    expect(coreTools).toHaveLength(8);
+    // Each populated surface includes code mode and harness; find and the shell exec pair remain exclusive.
+    expect(coreTools).toHaveLength(9);
     expect(desktopTools).toHaveLength(BROWSER_TOOLS.length + (IS_WINDOWS ? 16 : process.platform === 'darwin' ? 3 : 1));
 
     // And the size, which is what a discovery pull actually costs the model on every
@@ -932,7 +932,7 @@ describe('2025-era clients', () => {
     expect(instructions).toContain('/skills/<id>/SKILL.md');
     // The requested upstream collaboration prose replaces the old minimal tool preamble.
     expect(instructions).toContain('User authorization and preferences persist across turns.');
-    expect(instructions.length).toBeLessThan(18_000);
+    expect(instructions.length).toBeLessThan(19_500);
   });
 
   it('points at the other connector rather than pretending the capability does not exist', async () => {
@@ -1039,7 +1039,7 @@ describe('capability gating', () => {
     ctx.caps = effectiveCapabilities(config);
     ctx.readOnly = true;
 
-    expect(toolNames(await core('tools/list'))).toEqual(['exec', 'find', 'read', 'view_image']);
+    expect(toolNames(await core('tools/list'))).toEqual(['exec', 'find', 'harness', 'read', 'view_image']);
   });
 
   it('offers apply_patch only when a writing permission is on', async () => {

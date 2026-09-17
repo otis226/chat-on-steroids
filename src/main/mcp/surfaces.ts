@@ -103,10 +103,11 @@ const CORE: SurfaceDefinition = {
     'running builds, tests, linters, git, npm and shell commands, continuing long-running or interactive terminal sessions, ' +
     'and saving images and files ChatGPT generates onto this computer. ' +
     'Also displays task plans and — when the user has ' +
-    'enabled it — spawns and coordinates worker agents, subagents or a parallel swarm across several ChatGPT conversations.',
+    'enabled it — spawns and coordinates worker agents, subagents or a parallel swarm across several ChatGPT conversations. ' +
+    'Coordinates persistent external coding harness sessions (Codex Desktop, Claude Code CLI) as durable, session-scoped bindings.',
   cardSummary: 'Files, patches and the terminal. Required — this is the coding connector.',
   required: true,
-  tools: ['read', 'view_image', 'find', 'apply_patch', 'exec_command', 'write_stdin', 'update_plan', 'agents', 'session_finish', 'exec']
+  tools: ['read', 'view_image', 'find', 'apply_patch', 'exec_command', 'write_stdin', 'update_plan', 'agents', 'harness', 'session_finish', 'exec']
 };
 
 /**

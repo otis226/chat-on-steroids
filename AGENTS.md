@@ -147,6 +147,7 @@ The renderer has no direct filesystem, command, secret or generic main-process a
 | Agent routing | Exact prime family/run incarnation + worker conversation; `worker-1` alone is ambiguous. |
 | Workspace | Proven session/project or caller/agent key + cwd. |
 | Terminal | Durable local session principal → process session id. |
+| External harness | Durable local session + workstream key → exact Codex project/thread/host or Claude session id. |
 | Renderer | Selected session/draft key + load generation. |
 | Connection | Endpoint/tunnel generation. |
 | Desktop input | Capture frame/accessibility ref + target geometry + helper generation. |
@@ -216,6 +217,7 @@ Paths in this section are repository-relative. Most mechanisms have `main`, `sha
 | Config/security | `src/main/config.ts`, `platform.ts`, `secrets.ts`, `sandbox.ts`, `redaction.ts`; `src/shared/types.ts`, `capabilities.ts`: permission and host projection, secrets, approved paths. |
 | Publication | `src/main/connection.ts`, `mcp/server.ts`, `mcp/surfaces.ts`, `tunnel/{index,health,locate}.ts`, `diagnostics.ts`: endpoint/tunnel generation and truthful status. |
 | Tool dispatch | `src/main/mcp/{tools,kernel,inbound,call-context,tool-declarations}.ts`, `tools-core.ts`, `tools-desktop.ts`, `tools-plugins.ts`: declarations, exact caller, live guards and evidence. |
+| External coding harness | `src/main/harness/*`, `src/main/mcp/harness-tool.ts`: durable session-scoped bindings to native Codex Desktop threads or persistent Claude Code sessions, exact continue/status/detach routing, and native protocol adapters. |
 | Code composition | `src/main/mcp/code-mode-{tool,runtime,worker}.ts`: surface-scoped `exec`, QuickJS admission, limits and explicit emissions. |
 | Instructions/plan | `src/main/mcp/{instructions,coding-instructions,plan-tool}.ts`, `src/shared/agent-plan.ts`, `src/renderer/agent-plan.ts`: executor contract and displayed progress plan. |
 | Local files/processes | `src/main/{rawfs,fsops,search,ripgrep,env,toolchain,exec,exec-hints,text-match,diffstat}.ts`, `src/main/codex/*`: bounded filesystem/shell implementation. |
@@ -261,6 +263,7 @@ Paths in this section are repository-relative. Most mechanisms have `main`, `sha
 | Browser repair | `bridge.ts` process-memory episodes | Re-earn from live evidence; never restore an old reload token as action authority. |
 | Catalog/usage | Saved successful `chat-models`; derived `usage-cache`; live usage snapshot | Catalog is observation, not a send receipt; estimates are not provider billing. |
 | Connector refresh | `plugin-refresh.ts` / `state/plugin-refresh.json` | Exact installed app id + schema fingerprint, claimed before Refresh, verified after. |
+| External harness binding | `harness/store.ts` / `state/harness-bindings.json` | Serialize the local-session + workstream-key mutation, commit the exact snapshot before publishing memory, and fail closed on ambiguous external identity. |
 
 ## 5. Startup, configuration and shutdown
 
@@ -325,7 +328,7 @@ still checks live policy. Schema visibility is never the security boundary.
 
 | Surface | Advertised operations under current eligibility |
 | --- | --- |
-| Core — `chat-on-steroids-core` | `read`, `view_image`, `find` when command execution is off, `apply_patch`, `exec_command`/`write_stdin`, `update_plan`, `agents`, `session_finish`, code-mode `exec`. |
+| Core — `chat-on-steroids-core` | `read`, `view_image`, `find` when command execution is off, `apply_patch`, `exec_command`/`write_stdin`, `update_plan`, `agents`, `harness`, `session_finish`, code-mode `exec`. |
 | Desktop — `chat-on-steroids-desktop` | All Chromium extension hosts: `browser_tabs`, `browser_snapshot`, `browser_screenshot`, `browser_console`, `browser_network`, `browser_navigate`, `browser_action`, `browser_evaluate`. Windows additionally exposes 13 Window2 operations, clipboard and `exec` with `sky`; macOS adds `observe`/`computer`. Surface `exec` composes browser tools too. |
 | Plugins — `chat-on-steroids-plugins` | Enabled external tools with their upstream names and schemas, plus code-mode `exec` when that composition name is available. |
 
@@ -745,6 +748,34 @@ Appearance application refreshes all existing xterm palettes, including hidden t
 current page/ink tokens without recreating shells; cursor colors follow the same palette.
 `scripts/verify-workspace-terminal.cjs` tests real Electron/PTY input, cwd/environment persistence,
 hide/reopen, tabs, Ctrl+C, exit codes, resize and closing against isolated state.
+
+### Persistent external coding harness
+
+`mcp/harness-tool.ts` exposes one Core-owned coordinator for substantive work delegated to native
+Codex Desktop or Claude Code. A binding is scoped by the exact durable local session plus a bounded
+workstream key. `start` creates a new binding and refuses an existing live key; `continue` sends to
+that binding's exact external conversation; `status` and `list` inspect it; `detach` removes only
+the local continuation record and never terminates or deletes the external session. When Command
+permission is off, list/status may still report durable local state but must not open a Codex pipe
+or launch Claude CLI. Start/continue/detach require the live Command capability.
+
+Codex uses the native Codex Desktop `codex_app` protocol, not `codex exec`: resolve exactly one
+saved `local` project whose real path equals the approved workdir, carry a recent eligible Desktop
+thread only as transport `callingThreadId`, and own the task by explicit project/thread/host ids.
+Tool calls use the bare native tool name and unwrap the app's `contentItems` envelope before parsing
+business JSON. Duplicate or non-local project matches fail closed. Claude first opens the final
+app-generated UUID through the normal interactive CLI/TUI and exits before any model turn, proving
+that UUID is indexed on Claude's normal history/resume surface. The real task then resumes that same
+UUID in background mode and is promoted active only after exact background identity plus Remote
+Control bridge evidence are proven. Transcript/job persistence or an `agents` row alone is not
+user-visible-session acceptance. Later turns resume exactly that UUID without launch-only flags and
+refuse a continue while the same session is already busy or no longer has normal-history evidence.
+
+`harness/store.ts` persists bindings in `state/harness-bindings.json`. Critical state transitions
+serialize per store, write the exact snapshot before publishing it in memory, and retain the last
+committed state if persistence fails. Startup restore validates every row rather than treating a
+corrupt binding as execution authority. External live status is observation only; neither a worker
+report nor a reachable native session by itself proves the product task is complete.
 
 ### Images
 

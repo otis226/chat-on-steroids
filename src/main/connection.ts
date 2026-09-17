@@ -158,6 +158,7 @@ function toolsFor(id: SurfaceId): string[] {
   if (!caps.command && caps.search) tools.push('find');
   if (caps.create || caps.edit || caps.move || caps.deleteFile) tools.push('apply_patch');
   if (caps.command) tools.push('exec_command', 'write_stdin');
+  if (caps.command || caps.read || caps.browse || caps.search || caps.metadata) tools.push('harness');
   if (config.sessions.record) tools.push('update_plan');
   if (config.multiAgent.enabled) tools.push('agents');
   return tools;

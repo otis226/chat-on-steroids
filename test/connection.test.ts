@@ -153,6 +153,12 @@ describe('connection surface state', () => {
     }
   });
 
+  it('projects the harness tool on the Core connector whenever its read/status surface is available', async () => {
+    const connection = await import('../src/main/connection.js');
+    const core = connection.getStatus().surfaces.find((surface) => surface.id === 'core');
+    expect(core?.tools).toContain('harness');
+  });
+
   it('ignores retired Plugins tunnel reports after changing only its tunnel', async () => {
     mocks.config.tunnel.kind = 'openai';
     mocks.config.tunnel.tunnelId = 'core-test';

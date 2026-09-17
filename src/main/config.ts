@@ -248,6 +248,7 @@ const capabilitiesSchema = z
  */
 export const MAX_MCP_INSTRUCTIONS_CHARS = 4000;
 const DEFAULT_MCP = { instructions: '' } as const;
+const DEFAULT_SEMANTIC_PREFLIGHT = { enabled: false } as const;
 
 const configSchema = z.object({
   // A config written by hand — or by a build before `/skills` was reserved — must not be
@@ -436,7 +437,14 @@ const configSchema = z.object({
     })
     .optional()
     .default({ ...DEFAULT_MCP })
-    .catch({ ...DEFAULT_MCP })
+    .catch({ ...DEFAULT_MCP }),
+  semanticPreflight: z
+    .object({
+      enabled: z.boolean().optional().default(DEFAULT_SEMANTIC_PREFLIGHT.enabled)
+    })
+    .optional()
+    .default({ ...DEFAULT_SEMANTIC_PREFLIGHT })
+    .catch({ ...DEFAULT_SEMANTIC_PREFLIGHT })
 });
 
 /**
@@ -463,7 +471,8 @@ export function defaultConfig(platform: NodeJS.Platform = process.platform, rele
     compaction: { ...DEFAULT_COMPACTION },
     multiAgent: { ...FIRST_LAUNCH_MULTI_AGENT },
     goal: { ...DEFAULT_GOAL },
-    mcp: { ...DEFAULT_MCP }
+    mcp: { ...DEFAULT_MCP },
+    semanticPreflight: { ...DEFAULT_SEMANTIC_PREFLIGHT }
   };
 }
 

@@ -672,6 +672,19 @@
                     <button class="btn" id="swarmReset" type="button">Clear swarm</button>
                   </div>
                 </div>
+                <h2 class="settings-section-title">Semantic task routing</h2>
+                <div class="pane">
+                  <label class="setting"><span class="setting-text"><b>TypeSafe task preflight</b><em>Ask Jev once on the opening request of a new ChatGPT conversation for execution-shape, context and verification hints. Workers and tool calls do not trigger it; failures fall back to the normal Core path.</em></span><input id="semanticPreflight" type="checkbox" /></label>
+                  <div class="field">
+                    <label for="typeSafeKey">TypeSafe API key</label>
+                    <input id="typeSafeKey" type="password" spellcheck="false" placeholder="ts-…" autocomplete="off" />
+                    <p class="hint" id="typeSafeKeyState"></p>
+                    <div class="step-actions">
+                      <button class="btn" id="typeSafeKeyRemove" type="button">Remove stored key</button>
+                      <button class="btn" type="button" data-link="https://console.typesafe.ai"><svg class="ico" viewBox="0 0 24 24"><use href="#i-out" /></svg>Open TypeSafe console</button>
+                    </div>
+                  </div>
+                </div>
                 <h2 class="settings-section-title">Keep the turn open</h2>
                 <div class="pane">
                   <label class="setting"><span class="setting-text"><b>Plan generation</b><em>Create staged tasks. ChatGPT uses the Goal, Loop and Plan model above; API uses the model and reasoning in API provider settings.</em></span><select id="planBackend"><option value="chatgpt">ChatGPT</option><option value="api">API provider</option></select></label>

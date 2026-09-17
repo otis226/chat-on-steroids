@@ -151,20 +151,22 @@ describe('runCommand', () => {
   it('keeps secret environment variables away from the child', async () => {
     process.env.CONTROL_PLANE_API_KEY = 'sk-should-not-leak';
     process.env.OPENAI_API_KEY = 'sk-should-not-leak-either';
+    process.env.TYPESAFE_API_KEY = 'typesafe-should-not-leak';
     try {
       const result = await runCommand(
         node,
         [
           '-e',
-          'console.log(JSON.stringify([process.env.CONTROL_PLANE_API_KEY ?? null, process.env.OPENAI_API_KEY ?? null]))'
+          'console.log(JSON.stringify([process.env.CONTROL_PLANE_API_KEY ?? null, process.env.OPENAI_API_KEY ?? null, process.env.TYPESAFE_API_KEY ?? null]))'
         ],
         cwd,
         10_000
       );
-      expect(JSON.parse(result.stdout.trim())).toEqual([null, null]);
+      expect(JSON.parse(result.stdout.trim())).toEqual([null, null, null]);
     } finally {
       delete process.env.CONTROL_PLANE_API_KEY;
       delete process.env.OPENAI_API_KEY;
+      delete process.env.TYPESAFE_API_KEY;
     }
   });
 

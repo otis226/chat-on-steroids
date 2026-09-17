@@ -44,6 +44,7 @@ export interface SettingsPatch {
   sessions: Config['sessions'];
   compaction: Config['compaction'];
   multiAgent: Config['multiAgent'];
+  semanticPreflight?: Config['semanticPreflight'];
   goal: Config['goal'];
   mcp: Config['mcp'];
 }
@@ -129,6 +130,8 @@ const api = {
   setGoalKey: (value: string) => call<AppState>('secret:set', { value, key: 'openRouterApiKey' }),
   // The same, for a custom provider endpoint. Optional: keyless local servers need nothing stored.
   setCustomProviderKey: (value: string) => call<AppState>('secret:set', { value, key: 'customProviderApiKey' }),
+  // TypeSafe/Jev semantic preflight credential. It is never read back through IPC.
+  setTypeSafeKey: (value: string) => call<AppState>('secret:set', { value, key: 'typeSafeApiKey' }),
   listGoalModels: (offset: number) => call<GoalModelPage>('goal:models', { offset }),
   pickBinary: () => call<AppState>('binary:pick'),
   connect: () => call<AppState>('connection:connect'),

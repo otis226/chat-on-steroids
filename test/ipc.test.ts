@@ -693,6 +693,22 @@ describe('settings writes from more than one UI', () => {
       expect(JSON.stringify(response)).not.toContain('synthetic-active-key');
     } finally { retired.mockRestore(); }
   });
+  it('stores the TypeSafe key in the secure slot and exposes only presence', async () => {
+    const response = await handlers.get('secret:set')!({}, { key: 'typeSafeApiKey', value: 'synthetic-typesafe-key' });
+    expect(response).toMatchObject({ ok: true, data: { hasTypeSafeKey: true } });
+    expect(JSON.stringify(response)).not.toContain('synthetic-typesafe-key');
+  });
+  it('persists semantic preflight opt-in while legacy settings saves preserve the live value', async () => {
+    const base = defaultConfig(); await saveConfig(base);
+    const enabled = { ...base, semanticPreflight: { enabled: true } };
+    expect((await save(enabled, base)).ok).toBe(true);
+    expect(getConfig().semanticPreflight.enabled).toBe(true);
+
+    const legacyBase = { ...base } as any; delete legacyBase.semanticPreflight;
+    const legacyWanted = { ...legacyBase, ui: { ...legacyBase.ui, browserOnly: true } };
+    expect((await save(legacyWanted, legacyBase)).ok).toBe(true);
+    expect(getConfig().semanticPreflight.enabled).toBe(true);
+  });
   it('persists connector instructions through IPC, preserves concurrent edits, and allows explicit clearing', async () => {
     const base = defaultConfig(); await saveConfig(base);
     const wanted = { ...base, mcp: { instructions: 'Use the approved project only.' }, ui: { ...base.ui, browserOnly: true } };

@@ -4,10 +4,16 @@ import { effectiveCapabilities, getConfig } from '../config.js';
 import { currentCoreInstructions } from '../mcp/instructions.js';
 import { getSessionProject, projectWorkspace } from '../projects.js';
 import { resolvePath } from '../sandbox.js';
+import { semanticPreflightForTask } from '../semantic-preflight.js';
 import { MAX_CHATGPT_MESSAGE_CHARS, prependUserPrompt } from '../../shared/user-prompt.js';
 import { selectedSkillInstructions, type SelectedSkill } from './skill-prompt.js';
 
-type PromptScope = { sessionId?: string | null; projectId?: string | null };
+type PromptScope = {
+  sessionId?: string | null;
+  projectId?: string | null;
+  /** Only fresh user-authored tasks opt into Jev. Worker bootstraps already receive a bounded task. */
+  semanticPreflight?: boolean;
+};
 export type PromptLimits = { maxChars: number; maxBytes: number };
 type ProjectInstructions = { directory: string; text: string; truncated: boolean };
 const limits: PromptLimits = { maxChars: MAX_CHATGPT_MESSAGE_CHARS, maxBytes: Infinity };
@@ -107,7 +113,11 @@ export function fitSessionPrompt(text: string, core: string, agents: ProjectInst
 /** Opening normal/worker messages only. Callers own first-message eligibility;
  * follow-ups, helpers, handoff requests and resumed bootstraps never call this. */
 export async function prepareSessionPrompt(text: string, scope: PromptScope = {}, budget = limits, authored = text): Promise<string> {
-  const core = await currentCoreInstructions();
+  let core = await currentCoreInstructions();
+  if (scope.semanticPreflight) {
+    const preflight = await semanticPreflightForTask(authored);
+    if (preflight) core += `\n\n${preflight}`;
+  }
   const skills = await selectedSkillInstructions(authored);
   fitSessionPrompt(text, core, null, budget); // Only Core/task overflow is mandatory.
   return fitSessionPrompt(text, core, await projectInstructions(scope), budget, skills);

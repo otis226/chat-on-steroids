@@ -307,6 +307,11 @@ export interface McpSettings {
   instructions: string;
 }
 
+/** Optional semantic routing hint run once when a brand-new user task opens. */
+export interface SemanticPreflightSettings {
+  enabled: boolean;
+}
+
 export interface Config {
   /** Inactive setups only. Keys remain in encrypted secret slots addressed by profile ID. */
   setupProfiles?: Array<{ id: string; name: string; tunnelId: string; desktopTunnelId: string; pluginsTunnelId: string }>;
@@ -320,6 +325,7 @@ export interface Config {
   multiAgent: MultiAgentSettings;
   goal: GoalSettings;
   mcp: McpSettings;
+  semanticPreflight: SemanticPreflightSettings;
 }
 
 export type ConnectionState =
@@ -555,6 +561,8 @@ export interface AppState {
   hasGoalKey: boolean;
   /** True when a custom-provider key is stored. Only meaningful beside a custom endpoint, which may also run keyless. */
   hasCustomProviderKey: boolean;
+  /** True when a TypeSafe API key is stored for the optional Jev semantic preflight. */
+  hasTypeSafeKey: boolean;
   /** Resolved path of the tunnel binary we would run, or null if we cannot find one. */
   resolvedBinary: string | null;
   /** Version of the tunnel-client copy shipped inside the app, for diagnostics. */

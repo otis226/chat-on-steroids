@@ -44,6 +44,7 @@ it('does not overwrite a focused dirty settings field on an unsolicited state pu
     sessions: { record: true, retainDays: 30, advisoryTokens: 300000, limitTokens: 400000 },
     compaction: { auto: true, autoTokens: 300000 },
     multiAgent: { enabled: false, maxWorkers: 2, allowUnattributedCalls: false, recoverAgentTabs: true },
+    semanticPreflight: { enabled: false },
     goal: {
       enabled: false,
       model: 'deepseek/deepseek-v4-flash',
@@ -56,6 +57,7 @@ it('does not overwrite a focused dirty settings field on an unsolicited state pu
     status: { state: 'disconnected', detail: '', publicUrl: null, localUrl: null, handshakeAt: null, lastRequestAt: null, lastToolCallAt: null, health: null, surfaces: [] },
     hasApiKey: false,
     hasGoalKey: false,
+    hasTypeSafeKey: false,
     resolvedBinary: null,
     bundledTunnelVersion: null,
     bridge: { running: true, port: 8765, paired: false, present: false, lastSeenAt: null, extensionVersion: null },
@@ -399,6 +401,11 @@ async function mountChat(
       },
       setApiKey: (value: string) => {
         keys.push({ method: 'setApiKey', value });
+        return ok(state);
+      },
+      setTypeSafeKey: (value: string) => {
+        keys.push({ method: 'setTypeSafeKey', value });
+        state.hasTypeSafeKey = value !== '';
         return ok(state);
       },
       listGoalModels: (offset: number) => {
@@ -1137,6 +1144,29 @@ it('sends the key to the secret store and never into the settings patch', async 
   // Cleared from the input as well: a stored key has no reason to stay on screen.
   expect(field.value).toBe('');
   expect(JSON.stringify(mounted.calls)).not.toContain('sk-or-v1');
+});
+
+it('keeps TypeSafe preflight off until a secure key exists, stores the key outside settings, then enables it', async () => {
+  const mounted = await mountChat();
+  const doc = mounted.window.document;
+  const toggle = doc.getElementById('semanticPreflight') as HTMLInputElement;
+  const field = doc.getElementById('typeSafeKey') as HTMLInputElement;
+  expect(toggle.disabled).toBe(true);
+  expect(toggle.checked).toBe(false);
+
+  field.value = 'ts-not-a-real-key';
+  field.dispatchEvent(new mounted.window.Event('blur'));
+  await settle();
+  expect(mounted.keys).toContainEqual({ method: 'setTypeSafeKey', value: 'ts-not-a-real-key' });
+  expect(field.value).toBe('');
+  expect(JSON.stringify(mounted.calls)).not.toContain('ts-not-a-real-key');
+  expect(toggle.disabled).toBe(false);
+
+  toggle.checked = true;
+  toggle.dispatchEvent(new mounted.window.Event('change'));
+  await settle();
+  await settle();
+  expect(mounted.calls.at(-1)?.semanticPreflight).toEqual({ enabled: true });
 });
 
 it('keeps secret-key input on secure-storage failure', async () => {

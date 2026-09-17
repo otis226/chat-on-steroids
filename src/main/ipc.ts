@@ -176,6 +176,7 @@ const settingsPatch = z.object({
     allowUnattributedCalls: z.boolean(),
     recoverAgentTabs: z.boolean()
   }),
+  semanticPreflight: z.object({ enabled: z.boolean() }).strict().optional(),
   mcp: z.object({ instructions: z.string().trim().max(MAX_MCP_INSTRUCTIONS_CHARS) }).strict().optional(),
   goal: z.object({
     impulseMinutes: z.number().int().min(0).max(60).optional(),
@@ -314,6 +315,13 @@ function mergeSettings(current: Config, base: SettingsSnapshot, wanted: Settings
         wanted.multiAgent.recoverAgentTabs
       )
     },
+    semanticPreflight: wanted.semanticPreflight ? {
+      enabled: pick(
+        current.semanticPreflight.enabled,
+        base.semanticPreflight?.enabled ?? current.semanticPreflight.enabled,
+        wanted.semanticPreflight.enabled
+      )
+    } : current.semanticPreflight,
     goal: {
       impulseMinutes: pick(current.goal.impulseMinutes, base.goal.impulseMinutes, wanted.goal.impulseMinutes),
       includeToolCalls: pick(current.goal.includeToolCalls, base.goal.includeToolCalls, wanted.goal.includeToolCalls),
@@ -369,6 +377,7 @@ async function buildState(): Promise<AppState> {
     hasApiKey: await hasSecret(setupApiKeySlot(config.tunnel.profileId)),
     hasGoalKey: await hasSecret('openRouterApiKey'),
     hasCustomProviderKey: await hasSecret('customProviderApiKey'),
+    hasTypeSafeKey: await hasSecret('typeSafeApiKey'),
     resolvedBinary: resolvedBinary(config),
     bundledTunnelVersion: bundledVersion(),
     bridge: await bridgeStatus(),
@@ -631,7 +640,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
       .object({
         value: z.string().max(500),
         profileId: z.string().min(1).max(64).optional(),
-        key: z.enum(['openaiApiKey', 'openRouterApiKey', 'customProviderApiKey']).default('openaiApiKey')
+        key: z.enum(['openaiApiKey', 'openRouterApiKey', 'customProviderApiKey', 'typeSafeApiKey']).default('openaiApiKey')
       })
       .parse(payload);
     if (!(await isEncryptionAvailable())) {
@@ -644,7 +653,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     await setSecret(key === 'openaiApiKey' ? setupApiKeySlot(owner) : key, value);
     const activeGoalKey = getConfig().goal.provider.kind === 'custom' ? 'customProviderApiKey' : 'openRouterApiKey';
     if (key === activeGoalKey) retireGoalDrafts();
-    const what = key === 'openRouterApiKey' ? 'openrouter key' : key === 'customProviderApiKey' ? 'custom provider key' : 'api key';
+    const what = key === 'openRouterApiKey' ? 'openrouter key'
+      : key === 'customProviderApiKey' ? 'custom provider key'
+      : key === 'typeSafeApiKey' ? 'typesafe key'
+      : 'api key';
     logInfo(value.trim() === '' ? `${what} cleared` : `${what} stored`);
     return buildState();
   });
@@ -1089,7 +1101,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
       // Only the opening user input owns executor setup. Existing chats, queued
       // checkpoints and automatic continuations already have their instructions.
       return (entry.opening || !entry.sessionId) && !entry.conversationId && !entry.finishOwner && entry.mode !== 'finish'
-        ? prepareSessionPrompt(text, entry, limits, authored)
+        ? prepareSessionPrompt(text, { ...entry, semanticPreflight: true }, limits, authored)
         : !entry.finishOwner && entry.purpose !== 'decision' ? prepareSkillFollowup(text, authored, limits) : text;
     },
     applyAutomation: async (conversationId, automation, phase, objective, loopAfterTurn) => {

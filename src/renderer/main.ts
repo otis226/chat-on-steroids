@@ -476,6 +476,7 @@ async function saveSnapshot(patch: SettingsPatch, previous: AppState['config']):
     compaction: previous.compaction,
     mcp: previous.mcp ?? { instructions: '' },
     multiAgent: previous.multiAgent,
+    semanticPreflight: previous.semanticPreflight,
     goal: previous.goal
   };
   const next = await run(api.saveSettings(patch, base));

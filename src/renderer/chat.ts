@@ -2774,6 +2774,7 @@ export function chatSettingsPatch(current: Config): {
   sessions: Config['sessions'];
   compaction: Config['compaction'];
   multiAgent: Config['multiAgent'];
+  semanticPreflight: Config['semanticPreflight'];
   goal: Config['goal'];
   mcp: Config['mcp'];
 } {
@@ -2806,6 +2807,9 @@ export function chatSettingsPatch(current: Config): {
       maxWorkers: number('maWorkers', current.multiAgent.maxWorkers, 1, 8),
       allowUnattributedCalls: $<HTMLInputElement>('allowUnattributedCalls').checked,
       recoverAgentTabs: $<HTMLInputElement>('recoverAgentTabs').checked
+    },
+    semanticPreflight: {
+      enabled: $<HTMLInputElement>('semanticPreflight').checked
     },
     goal: {
       enabled: current.goal.enabled, mode: current.goal.mode,
@@ -3036,6 +3040,27 @@ function applyGoal(state: AppState, previous?: Config): void {
   if (goalModels.length > 0) paintGoalModels();
 }
 
+/** Writes the optional TypeSafe/Jev task preflight controls from app state. */
+function applySemanticPreflight(state: AppState, previous?: Config): void {
+  const secureStorageAvailable = state.secureStorage?.available ?? true;
+  const preflight = state.config.semanticPreflight ?? { enabled: false };
+  const hasKey = state.hasTypeSafeKey === true;
+  const enabled = $<HTMLInputElement>('semanticPreflight');
+  applyChatChecked(enabled, preflight.enabled, previous?.semanticPreflight?.enabled);
+  enabled.disabled = !secureStorageAvailable || !hasKey;
+
+  const key = $<HTMLInputElement>('typeSafeKey');
+  ui(key, 'placeholder', () => hasKey ? t("•••••••• stored") : 'ts-…');
+  key.disabled = !secureStorageAvailable;
+  ui($('typeSafeKeyState'), 'textContent', () => !secureStorageAvailable
+    ? (state.secureStorage?.detail ?? t("Secure credential storage is unavailable."))
+    : hasKey
+      ? t("A key is stored with secure OS credential storage. Type a new one to replace it.")
+      : t("Add your TypeSafe key first, then enable semantic preflight."));
+  $('typeSafeKeyState').classList.toggle('is-warn', !secureStorageAvailable || !hasKey);
+  $<HTMLButtonElement>('typeSafeKeyRemove').disabled = !hasKey || !secureStorageAvailable;
+}
+
 function wireGoal(save: () => Promise<void>): void {
   $<HTMLTextAreaElement>('goalPrompt').maxLength = MAX_GOAL_SYSTEM_PROMPT_CHARS;
   $('goalPromptEdit').addEventListener('click', () => {
@@ -3145,6 +3170,28 @@ function wireGoal(save: () => Promise<void>): void {
       toast('Custom provider key removed');
     }
   });
+  $('typeSafeKey').addEventListener('blur', async () => {
+    const input = $<HTMLInputElement>('typeSafeKey');
+    const submitted = input.value;
+    const key = submitted.trim();
+    if (key === '') return;
+    const next = await run(api.setTypeSafeKey(key));
+    if (next) {
+      if (input.value === submitted) input.value = '';
+      applySemanticPreflight(next);
+      toast('TypeSafe key stored');
+    }
+  });
+  $('typeSafeKeyRemove').addEventListener('click', async () => {
+    const next = await run(api.setTypeSafeKey(''));
+    if (next) {
+      if ((next.config.semanticPreflight ?? { enabled: false }).enabled) {
+        $<HTMLInputElement>('semanticPreflight').checked = false;
+        await save();
+      } else applySemanticPreflight(next);
+      toast('TypeSafe key removed');
+    }
+  });
 }
 
 /**
@@ -3168,6 +3215,7 @@ function applyAutoCompactHint(config: Config): void {
  */
 const CHAT_INPUTS = [
   'chatBrowser',
+  'semanticPreflight',
   'goalIncludeToolCalls',
   'planBackend',
   'finishTool', 'finishLeadMinutes', 'workerModel', 'workerReasoning', 'backgroundChats', 'browserOnly', 'autoRefreshPlugins',
@@ -3221,6 +3269,7 @@ export function chatApply(state: AppState, previous?: Config): void {
   applyChatValue($<HTMLSelectElement>('loopBackend'), config.goal.loopBackend ?? 'chatgpt', previous?.goal.loopBackend);
   applyChatValue($<HTMLSelectElement>('helperModel'), config.goal.helperModel ?? 'gpt-5.6-sol', previous?.goal.helperModel);
   applyChatValue($<HTMLSelectElement>('helperReasoning'), config.goal.helperReasoning ?? 'high', previous?.goal.helperReasoning);
+  applySemanticPreflight(state, previous);
   applyGoal(state, previous);
 
   // Extension bridge. Connecting is automatic, so this reports rather than asks.

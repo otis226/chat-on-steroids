@@ -3049,6 +3049,9 @@ describe('tool summaries', () => {
     });
     expect(summarize('write_stdin', { session_id: 'p1', signal: 'int' }).title).toBe('Interrupted session p1');
     expect(summarize('write_stdin', { session_id: 'p1', chars: 'y\n' }).title).toBe('Wrote to session p1');
+    expect(summarize('write_stdin', { session_id: 'p1' }, { outputReceived: true }).title).toBe(
+      'Received output from session p1'
+    );
     expect(summarize('write_stdin', { session_id: 'p1' }).title).toBe('Waited on session p1');
   });
 

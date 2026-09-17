@@ -2358,6 +2358,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       const base = { seq: event.seq, time: event.time, turnId: event.turnId ?? null, agent: event.agent ?? null };
       switch (event.kind) {
         case 'tool_call':
+          // write_stdin is raw audit history for an existing exec_command process. Once the
+          // recorder has linked it to that canonical parent, the parent's revision is the one
+          // logical activity row; projecting this child too would recreate the old wait spam.
+          if (event.call.processParentCallId) return [];
           return [{ ...base, seq: event.origin ?? event.seq, kind: 'tool_call', tool: event.call.tool, callId: event.call.callId,
             detailRevision: event.seq,
             process: event.call.process,
@@ -2458,7 +2462,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const nextSince = events.reduce((next, event) => Math.max(next, event.seq + 1), requestedSince);
 
     const entries = events.flatMap((event) =>
-      event.kind === 'tool_call'
+      event.kind === 'tool_call' && !event.call.processParentCallId
         ? [
             {
               seq: event.origin ?? event.seq,

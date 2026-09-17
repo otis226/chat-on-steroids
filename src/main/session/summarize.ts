@@ -320,6 +320,7 @@ function build(
     case 'write_stdin': {
       const id = str(args['session_id']) ?? '';
       const signal = str(args['signal']);
+      const receivedOutput = evidence.outputReceived === true;
       const title =
         signal === 'kill'
           ? `Stopped session ${id}`.trim()
@@ -327,7 +328,9 @@ function build(
             ? `Interrupted session ${id}`.trim()
             : str(args['chars'])
               ? `Wrote to session ${id}`.trim()
-              : `Waited on session ${id}`.trim();
+              : receivedOutput
+                ? `Received output from session ${id}`.trim()
+                : `Waited on session ${id}`.trim();
       return { kind: 'process', tone: signal === 'kill' ? 'warn' : 'neutral', title };
     }
 

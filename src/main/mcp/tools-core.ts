@@ -964,6 +964,7 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
               running: output.processId !== null,
               exitCode: output.exitCode,
               timedOut: false,
+              outputReceived: output.rawOutput.length > 0,
               // No `benignExit` here on purpose: a status this drains belongs to the child, is
               // recorded as `process_exit_nonzero`, and is already outside the reliability
               // numerator. Exempting it would relabel a failed test run `ok`.

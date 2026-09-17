@@ -43,6 +43,8 @@ import {
   appendEvent,
   recordProcessCall,
   completeProcessCall,
+  resolveProcessParentCall,
+  updateProcessCallActivity,
   observeSessionModel,
   conversationAttachment,
   createSession,
@@ -1350,9 +1352,21 @@ async function fileToolCall(input: ToolCallInput, target: Target): Promise<ToolC
       if (summary.tone !== 'bad') summary.tone = 'warn';
     }
 
+    const processSessionId = input.tool === 'write_stdin' && input.args && typeof input.args === 'object' && !Array.isArray(input.args)
+      ? (() => {
+          const value = (input.args as Record<string, unknown>)['session_id'];
+          return typeof value === 'number' && Number.isFinite(value) ? String(value)
+            : typeof value === 'string' && value ? value : null;
+        })()
+      : null;
+    const processParentCallId = processSessionId && (input.outcome === 'ok' || input.outcome === 'process_exit_nonzero')
+      ? await resolveProcessParentCall(sessionId, processSessionId, input.startedAt)
+      : null;
+
     const call: ToolCallRecord = {
       ...(target.attribution === 'request_id' && target.conversationId && evidence.processCompletion && evidence.processSessionId && input.tool === 'exec_command'
         ? { process: { sessionId: evidence.processSessionId } } : {}),
+      ...(processParentCallId ? { processParentCallId } : {}),
       ...callModel,
       callId: randomUUID(),
       tool: input.tool,
@@ -1384,6 +1398,12 @@ async function fileToolCall(input: ToolCallInput, target: Target): Promise<ToolC
       ...(eventAgent ? { agent: eventAgent } : {}),
       ...(target.turnId ? { turnId: target.turnId } : {})
     });
+    if (processParentCallId) {
+      const args = input.args as Record<string, unknown>;
+      const chars = typeof args['chars'] === 'string' ? args['chars'] : '';
+      const activity = evidence.outputReceived === true ? 'output' : chars ? 'input' : 'waiting';
+      await updateProcessCallActivity(sessionId, processParentCallId, activity);
+    }
     if (call.process && evidence.processCompletion) {
       // Bind once to the recorded call, never look up a reusable numeric process id.
       // A process that exited during recorder admission resolves this same promise.

@@ -1439,7 +1439,10 @@ export async function completeProcessCall(sessionId: string, callId: string, com
       ...previous, seq: entry.nextSeq,
       call: { ...previous.call, process: { ...previous.call.process, ...completion }, summary: {
         ...previous.call.summary,
-        title: previous.call.summary.title.replace(/^Started /, failed ? 'Command failed ' : 'Completed '),
+        title: previous.call.summary.title.replace(/^(?:Started|Running) /, failed ? 'Command failed ' : 'Completed '),
+        ...(previous.call.process.activityUpdates
+          ? { detail: `${previous.call.process.activityUpdates} update${previous.call.process.activityUpdates === 1 ? '' : 's'}` }
+          : {}),
         metric: exitCode === null ? 'finished (exit unknown)' : failed ? `✕ exit ${exitCode}` : '✓ finished',
         tone: exitCode === null ? 'warn' : failed ? 'bad' : 'good'
       } }
@@ -1453,6 +1456,84 @@ export async function completeProcessCall(sessionId: string, callId: string, com
     if (full.call.conversationId === entry.summary.conversationId)
       entry.summary.contextTokens = Math.max(0, entry.summary.contextTokens + delta);
     scheduleMeta(entry);
+  });
+}
+
+/**
+ * Resolves a write_stdin continuation to the latest prior exec_command in this durable session.
+ *
+ * Numeric process ids are manager-local and may eventually be reused. The durable local session
+ * is therefore the outer scope, and the existing exec call UUID is the logical execution identity.
+ * Choosing the latest prior launch with the same process id handles reuse without inventing a
+ * second process identity. Failed/refused continuations never call this helper.
+ */
+export async function resolveProcessParentCall(
+  sessionId: string,
+  processSessionId: string,
+  beforeTime: number
+): Promise<string | null> {
+  const entry = await ensureOpen(sessionId);
+  return enqueueSessionOperation(entry, 'process continuation parent', async () => {
+    let parent: Extract<SessionEvent, { kind: 'tool_call' }> | null = null;
+    for (const candidate of entry.messages.values()) {
+      if (
+        candidate.kind !== 'tool_call' ||
+        candidate.call.tool !== 'exec_command' ||
+        candidate.call.process?.sessionId !== processSessionId ||
+        candidate.time > beforeTime
+      ) continue;
+      const candidatePosition = candidate.origin ?? candidate.seq;
+      const parentPosition = parent ? parent.origin ?? parent.seq : -1;
+      if (!parent || candidatePosition > parentPosition) parent = candidate;
+    }
+    return parent?.call.callId ?? null;
+  });
+}
+
+/** Revises one canonical exec row after a raw write_stdin call has been durably recorded. */
+export async function updateProcessCallActivity(
+  sessionId: string,
+  parentCallId: string,
+  activity: 'output' | 'waiting' | 'input'
+): Promise<boolean> {
+  const entry = await ensureOpen(sessionId);
+  return enqueueSessionOperation(entry, 'process activity update', async () => {
+    const key = `tool_call\u0000${parentCallId}`;
+    const previous = entry.messages.get(key);
+    if (previous?.kind !== 'tool_call' || previous.call.tool !== 'exec_command' || !previous.call.process) return false;
+
+    const activityUpdates = (previous.call.process.activityUpdates ?? 0) + 1;
+    const outputUpdates = (previous.call.process.outputUpdates ?? 0) + (activity === 'output' ? 1 : 0);
+    const terminal = previous.call.process.completedAt !== undefined;
+    const state = activity === 'output' ? 'receiving output' : activity === 'input' ? 'sent input' : 'waiting on session';
+    const updateMetric = `${activityUpdates} update${activityUpdates === 1 ? '' : 's'}`;
+    const full: Extract<SessionEvent, { kind: 'tool_call' }> = {
+      ...previous,
+      seq: entry.nextSeq,
+      call: {
+        ...previous.call,
+        process: { ...previous.call.process, activityUpdates, outputUpdates, lastActivity: activity },
+        summary: terminal
+          ? { ...previous.call.summary, detail: updateMetric }
+          : {
+              ...previous.call.summary,
+              title: previous.call.summary.title.replace(/^(?:Started|Running) /, 'Running '),
+              detail: state,
+              metric: updateMetric,
+              tone: 'neutral'
+            }
+      }
+    };
+    await writeCanonicalMessage(sessionId, key, full);
+    entry.messages.set(key, full);
+    entry.nextSeq += 1;
+    entry.historySeq = full.seq;
+    const delta = eventTokens(full) - eventTokens(previous);
+    entry.summary.estimatedTokens = Math.max(0, entry.summary.estimatedTokens + delta);
+    if (full.call.conversationId === entry.summary.conversationId)
+      entry.summary.contextTokens = Math.max(0, entry.summary.contextTokens + delta);
+    scheduleMeta(entry);
+    return true;
   });
 }
 

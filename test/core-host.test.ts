@@ -11,6 +11,7 @@ import {
   initCoreRuntimeStatusPath,
   shouldFocusSecondInstance,
   shouldPresentDesktop,
+  shouldStartExternalPlugins,
   writeCoreRuntimeStatus
 } from '../src/main/core-host.js';
 
@@ -26,6 +27,8 @@ describe('headless Core launch policy', () => {
     expect(coreHostMode(['app.exe', '--headless'])).toBe('headless');
     expect(shouldPresentDesktop('desktop')).toBe(true);
     expect(shouldPresentDesktop('headless')).toBe(false);
+    expect(shouldStartExternalPlugins('desktop')).toBe(true);
+    expect(shouldStartExternalPlugins('headless')).toBe(false);
   });
 
   it('routes stop as control and never lets headless/control launches focus Desktop', () => {

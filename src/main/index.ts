@@ -86,6 +86,7 @@ import {
   initCoreRuntimeStatusPath,
   shouldFocusSecondInstance,
   shouldPresentDesktop,
+  shouldStartExternalPlugins,
   writeCoreRuntimeStatus,
   type CoreRuntimePhase
 } from './core-host.js';
@@ -356,7 +357,7 @@ void app.whenReady().then(async () => {
   await publishRuntimeStatus('starting').catch(error =>
     logWarn(`Core starting snapshot: ${error instanceof Error ? error.message : String(error)}`)
   );
-  await pluginManager.initialize(userData);
+  if (shouldStartExternalPlugins(hostMode)) await pluginManager.initialize(userData);
   if (windowActivation.isDisabled()) return;
   if (desktopPresentation) {
     try { applyLoginStartup(app, getConfig().ui.startAtLogin === true); }

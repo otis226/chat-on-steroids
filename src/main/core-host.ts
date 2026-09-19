@@ -31,6 +31,14 @@ export function shouldPresentDesktop(mode: CoreHostMode): boolean {
   return mode === 'desktop';
 }
 
+/**
+ * External MCP plugins belong to the Desktop runtime. Headless Core keeps their persisted
+ * configuration untouched, but must not reconnect or spawn them while serving only Core.
+ */
+export function shouldStartExternalPlugins(mode: CoreHostMode): boolean {
+  return mode === 'desktop';
+}
+
 export function shouldFocusSecondInstance(
   primaryMode: CoreHostMode,
   argv: readonly string[],

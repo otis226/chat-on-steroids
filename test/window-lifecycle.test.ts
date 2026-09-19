@@ -166,8 +166,8 @@ describe('Windows login startup', () => {
     applyLoginStartup(app, true, 'win32', 'C:/Program Files/Chat On Steroids/app.exe');
     applyLoginStartup(app, false, 'win32', 'C:/Program Files/Chat On Steroids/app.exe');
     expect(app.setLoginItemSettings.mock.calls).toEqual([
-      [{ openAtLogin: true, path: 'C:/Program Files/Chat On Steroids/app.exe', args: ['--background'] }],
-      [{ openAtLogin: false, path: 'C:/Program Files/Chat On Steroids/app.exe', args: ['--background'] }]
+      [{ openAtLogin: true, path: 'C:/Program Files/Chat On Steroids/app.exe', args: ['--headless'] }],
+      [{ openAtLogin: false, path: 'C:/Program Files/Chat On Steroids/app.exe', args: ['--headless'] }]
     ]);
     for (const platform of ['darwin', 'linux'] as const) applyLoginStartup(app, true, platform);
     app.isPackaged = false;

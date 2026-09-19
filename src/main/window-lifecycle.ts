@@ -95,5 +95,5 @@ export function applyLoginStartup(
   executable = process.execPath
 ): void {
   if (!supportsLoginStartup(platform, app.isPackaged)) return;
-  app.setLoginItemSettings({ openAtLogin: enabled, path: executable, args: ['--background'] });
+  app.setLoginItemSettings({ openAtLogin: enabled, path: executable, args: ['--headless'] });
 }

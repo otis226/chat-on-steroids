@@ -11,6 +11,7 @@ import {
   shouldBeginAppBootstrap,
   shouldQuitOnWindowAllClosed
 } from '../src/main/window-lifecycle.js';
+import { coreControlCommand, shouldFocusSecondInstance } from '../src/main/core-host.js';
 
 describe('native window activation', () => {
   it.each(['darwin', 'win32', 'linux'])('keeps native fullscreen available on macOS (%s)', (platform) => {
@@ -30,7 +31,7 @@ describe('native window activation', () => {
 
   it('maximizes only on initial presentation and preserves user-sized geometry on reopen', () => {
     const source = readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8');
-    const present = source.slice(source.indexOf('function showWindow()'), source.indexOf('\nsetFinishNotifier(', source.indexOf('function showWindow()'))).replace('function showWindow(): void', 'function showWindow()');
+    const present = source.slice(source.indexOf('function showWindow()'), source.indexOf('\nif (desktopPresentation) setFinishNotifier(', source.indexOf('function showWindow()'))).replace('function showWindow(): void', 'function showWindow()');
     const operations: string[] = [];
     const state = { minimized: false };
     const native = { isMinimized: () => state.minimized, isFullScreen: () => false,
@@ -180,7 +181,15 @@ describe('Windows login startup', () => {
     const handler = source.slice(start, source.indexOf('\n});', start) + 4);
     let received!: (event: unknown, argv: string[]) => void;
     const request = vi.fn();
-    vm.runInNewContext(handler, { app: { on: (_: string, listener: typeof received) => { received = listener; } }, windowActivation: { request }, isBackgroundLaunch });
+    vm.runInNewContext(handler, {
+      app: { on: (_: string, listener: typeof received) => { received = listener; }, quit: vi.fn() },
+      windowActivation: { request },
+      hostMode: 'desktop',
+      quitting: false,
+      isBackgroundLaunch,
+      coreControlCommand,
+      shouldFocusSecondInstance
+    });
     received({}, ['app.exe', '--background']);
     expect(request).not.toHaveBeenCalled();
     received({}, ['app.exe']);

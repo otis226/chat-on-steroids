@@ -25,6 +25,13 @@ Source alignment: **2026-09-17**, including the 2.1.14 release candidate. App/ex
 bridge protocol **14** in the checked declarations (`package.json`, `src/main/version.ts`,
 `extension/manifest.json`). This does not prove release, installation or live Chrome behavior.
 
+The Electron workspace is a presentation surface, not Core authority. The same main-process Core
+may run explicitly with `--headless`; in that mode it must not create BrowserWindow, renderer,
+tray or other presentation work. Headless runtime publishes the required Core surface only;
+Desktop and Plugins remain stored configuration but are not published or prewarmed until Desktop
+mode is used. Headless and Desktop modes share the same durable state,
+session/Goal/Loop/Compact ownership, bridge/MCP/tunnel logic and bounded shutdown sequence.
+
 ## 1. What the whole app is meant to do
 
 Chat On Steroids is a Windows/macOS/Linux Electron workspace around ChatGPT. The user can work

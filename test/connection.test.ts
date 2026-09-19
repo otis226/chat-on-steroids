@@ -153,6 +153,43 @@ describe('connection surface state', () => {
     }
   });
 
+  it('keeps headless core-only runtime from publishing or prewarming optional surfaces', async () => {
+    mocks.config.tunnel.kind = 'openai';
+    mocks.config.tunnel.tunnelId = 'core-only';
+    mocks.config.tunnel.desktopTunnelId = 'desktop-should-not-start';
+    mocks.config.tunnel.pluginsTunnelId = 'plugins-should-not-start';
+    Object.assign(mocks.caps, {
+      screen: true,
+      control: true,
+      clipboardRead: true,
+      clipboardWrite: true
+    });
+    const connection = await import('../src/main/connection.js');
+    connection.setCoreOnlyRuntime(true);
+    try {
+      await connection.connect();
+      expect(mocks.starts).toBe(1);
+      expect(mocks.prewarm).not.toHaveBeenCalled();
+      expect(connection.getStatus().surfaces.find((surface) => surface.id === 'core')).toMatchObject({
+        available: true,
+        state: 'live'
+      });
+      expect(connection.getStatus().surfaces.find((surface) => surface.id === 'desktop')).toMatchObject({
+        available: false,
+        state: 'off',
+        tools: []
+      });
+      expect(connection.getStatus().surfaces.find((surface) => surface.id === 'plugins')).toMatchObject({
+        available: false,
+        state: 'off',
+        tools: []
+      });
+    } finally {
+      await connection.disconnect();
+      connection.setCoreOnlyRuntime(false);
+    }
+  });
+
   it('ignores retired Plugins tunnel reports after changing only its tunnel', async () => {
     mocks.config.tunnel.kind = 'openai';
     mocks.config.tunnel.tunnelId = 'core-test';

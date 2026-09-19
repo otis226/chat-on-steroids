@@ -8,14 +8,14 @@ import { requestSessionFinishGoal, setFinishNotifier } from './session/finish.js
 import path from 'node:path';
 import { app, Notification, BrowserWindow, Menu, Tray, nativeImage, nativeTheme, screen, session } from 'electron';
 import { getConfig, initConfigPath, loadConfig } from './config.js';
-import { connect, disconnect, getStatus, onStatusChange, shutdownConnection } from './connection.js';
+import { connect, disconnect, getStatus, onStatusChange, setCoreOnlyRuntime, shutdownConnection } from './connection.js';
 import { registerIpc } from './ipc.js';
 import { getChatModels, restoreChatModels, startChatModelDiscovery } from './chat-models.js';
 import { flushLogBeforeExit, initLogFile, logError, logInfo, logWarn, snapshotLogOnCrash } from './logger.js';
 import { unifiedExecManager } from './codex/manager.js';
 import { initSecretsPath } from './secrets.js';
 import { pluginManager } from './plugins/manager.js';
-import { setBrowserOpener, setBrowserWorkArea, shutdownBridge, startBridge } from './bridge.js';
+import { bridgePort, onBridgeChange, setBrowserOpener, setBrowserWorkArea, shutdownBridge, startBridge } from './bridge.js';
 import { flushSessions, initSessionStore } from './session/store.js';
 import { initSkillsPath } from './skills.js';
 import { usageOverview } from './session/usage.js';
@@ -79,6 +79,16 @@ import {
 import { trayGuidArgsForPlatform, trayImageSpec } from './tray-image.js';
 import { browserWindowIconPath } from './window-icon.js';
 import { editContextMenuTemplate } from './edit-context-menu.js';
+import {
+  coreControlCommand,
+  coreHostMode,
+  coreRuntimeStatus,
+  initCoreRuntimeStatusPath,
+  shouldFocusSecondInstance,
+  shouldPresentDesktop,
+  writeCoreRuntimeStatus,
+  type CoreRuntimePhase
+} from './core-host.js';
 
 /** Durable state file holding the multi-agent run. Hashes only, never credentials. */
 const SWARM_STATE = 'swarm';
@@ -90,6 +100,27 @@ let quitting = false;
 let shutdownStarted = false;
 let shutdownComplete = false;
 const usageWarmup = new AbortController();
+const hostMode = coreHostMode(process.argv);
+const desktopPresentation = shouldPresentDesktop(hostMode);
+const startupControlCommand = coreControlCommand(process.argv);
+const runtimeStartedAt = Date.now();
+let runtimePhase: CoreRuntimePhase = 'starting';
+
+setCoreOnlyRuntime(hostMode === 'headless');
+if (hostMode === 'headless') app.disableHardwareAcceleration();
+
+function publishRuntimeStatus(phase: CoreRuntimePhase = runtimePhase): Promise<void> {
+  runtimePhase = phase;
+  return writeCoreRuntimeStatus(coreRuntimeStatus({
+    mode: hostMode,
+    phase,
+    pid: process.pid,
+    appVersion: app.getVersion(),
+    startedAt: runtimeStartedAt,
+    connection: getStatus(),
+    bridgePort: bridgePort()
+  }));
+}
 
 // One instance only: two copies would fight over the tunnel and the config file.
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
@@ -97,6 +128,12 @@ if (!hasSingleInstanceLock) {
   // `app.quit()` does not make the rest of this module stop executing. Mark this process as a
   // terminal secondary instance immediately, so neither native activation nor the async bootstrap
   // below can touch shared config/durable state while the primary instance is still running.
+  quitting = true;
+  app.quit();
+}
+if (hasSingleInstanceLock && startupControlCommand === 'stop') {
+  // A stop command with no existing primary has nothing to control. Exit before shared state
+  // bootstrap so a CLI no-op cannot become the application runtime by accident.
   quitting = true;
   app.quit();
 }
@@ -215,7 +252,7 @@ function showWindow(): void {
   window.focus();
 }
 
-setFinishNotifier((title, body, sessionId, turnId) => {
+if (desktopPresentation) setFinishNotifier((title, body, sessionId, turnId) => {
   if (window?.isFocused() || !Notification.isSupported()) return false;
   const write = (): void => {
     showWindow();
@@ -235,7 +272,7 @@ setFinishNotifier((title, body, sessionId, turnId) => {
   notice.show();
   return true;
 });
-setBrowserWorkArea(() => screen.getPrimaryDisplay().workArea);
+if (desktopPresentation) setBrowserWorkArea(() => screen.getPrimaryDisplay().workArea);
 
 // Electron promises `second-instance` only after its own `ready`, not after our async startup.
 // Until CSP/permission handlers and IPC are installed below, a re-launch is only a focus request
@@ -289,7 +326,12 @@ function refreshTray(): void {
 }
 
 app.on('second-instance', (_event, argv) => {
-  if (!isBackgroundLaunch(argv)) windowActivation.request();
+  if (coreControlCommand(argv) === 'stop') {
+    quitting = true;
+    app.quit();
+    return;
+  }
+  if (shouldFocusSecondInstance(hostMode, argv, isBackgroundLaunch(argv))) windowActivation.request();
 });
 
 void app.whenReady().then(async () => {
@@ -307,17 +349,23 @@ void app.whenReady().then(async () => {
   try { await initSkillsPath(userData); }
   catch (error) { logWarn(`Skills library unavailable: ${error instanceof Error ? error.message : String(error)}`); }
   initDurableStore(userData);
+  initCoreRuntimeStatusPath(userData);
   await restoreChatModels();
   if (windowActivation.isDisabled()) return;
   await loadConfig();
+  await publishRuntimeStatus('starting').catch(error =>
+    logWarn(`Core starting snapshot: ${error instanceof Error ? error.message : String(error)}`)
+  );
   await pluginManager.initialize(userData);
   if (windowActivation.isDisabled()) return;
-  try { applyLoginStartup(app, getConfig().ui.startAtLogin === true); }
-  catch (error) { logWarn(`Windows login startup: ${error instanceof Error ? error.message : String(error)}`); }
+  if (desktopPresentation) {
+    try { applyLoginStartup(app, getConfig().ui.startAtLogin === true); }
+    catch (error) { logWarn(`Windows login startup: ${error instanceof Error ? error.message : String(error)}`); }
+  }
   // The renderer has its own explicit light/dark palette, so native chrome must follow the same
   // user choice instead of Electron's default `system` theme. On macOS this controls the window
   // frame, application menus and OS dialogs; on Linux/Windows it covers Electron-native UI.
-  nativeTheme.themeSource = getConfig().ui.theme;
+  if (desktopPresentation) nativeTheme.themeSource = getConfig().ui.theme;
   const savedGoalObjectives = await readDurable<GoalObjectivesSnapshot>(GOAL_OBJECTIVES_STATE);
   if (windowActivation.isDisabled()) return;
   restoreGoalObjectives(savedGoalObjectives);
@@ -397,46 +445,52 @@ void app.whenReady().then(async () => {
   await reconcileAgentRequestOwners();
   if (windowActivation.isDisabled()) return;
 
-  // Strict CSP for our own page. There is no remote content and no inline script.
-  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    callback({
-      responseHeaders: {
-        ...details.responseHeaders,
-        'Content-Security-Policy': [
-          "default-src 'none'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
-        ]
-      }
+  if (desktopPresentation) {
+    // Strict CSP for our own page. There is no remote content and no inline script.
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'Content-Security-Policy': [
+            "default-src 'none'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
+          ]
+        }
+      });
     });
+
+    // Deny every permission request; the UI needs none of them.
+    session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+
+    // From here on a second launch may safely focus/recreate the window: renderer security policy
+    // is installed and the renderer's fixed IPC methods already have handlers before it can load.
+    registerIpc(
+      () => window,
+      () => {
+        quitting = true;
+        app.quit();
+      }
+    );
+    windowActivation.enable();
+    if (!isBackgroundLaunch(process.argv)) windowActivation.request();
+    registerNativeWindowActivation(app, windowActivation.request);
+
+    tray = new Tray(trayIcon(false), ...trayGuidArgsForPlatform());
+    tray.on('click', windowActivation.request);
+    refreshTray();
+  }
+
+  onStatusChange(() => {
+    if (desktopPresentation) refreshTray();
+    void publishRuntimeStatus().catch(error => logWarn(`Core status snapshot: ${error instanceof Error ? error.message : String(error)}`));
+  });
+  onBridgeChange(() => {
+    void publishRuntimeStatus().catch(error => logWarn(`Core bridge snapshot: ${error instanceof Error ? error.message : String(error)}`));
   });
 
-  // Deny every permission request; the UI needs none of them.
-  session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
-
-  // From here on a second launch may safely focus/recreate the window: renderer security policy
-  // is installed and the renderer's fixed IPC methods already have handlers before it can load.
-  // The same quit the tray's Quit performs. It has to go through `quitting` for the window's
-  // close-to-tray handler to let go: without it, quitting to install would hide the window and
-  // leave the app running, which is exactly the trap the Install button exists to end.
-  registerIpc(
-    () => window,
-    () => {
-      quitting = true;
-      app.quit();
-    }
+  logInfo(hostMode === 'headless' ? 'headless core started' : 'app started');
+  await publishRuntimeStatus('ready').catch(error =>
+    logWarn(`Core ready snapshot: ${error instanceof Error ? error.message : String(error)}`)
   );
-  windowActivation.enable();
-  if (!isBackgroundLaunch(process.argv)) windowActivation.request();
-  // macOS `activate` can fire on first launch, so do not wire it at module load where it could
-  // create a BrowserWindow before Electron is ready. Once the initial window path is established,
-  // Dock activation/re-launch can safely recreate or focus it.
-  registerNativeWindowActivation(app, windowActivation.request);
-
-  tray = new Tray(trayIcon(false), ...trayGuidArgsForPlatform());
-  tray.on('click', windowActivation.request);
-  refreshTray();
-  onStatusChange(refreshTray);
-
-  logInfo('app started');
 
   // Historical Unattributed repair may legitimately scan and rewrite a large legacy bucket.
   // It is maintenance, not a prerequisite for showing the app or accepting new exact-id
@@ -448,23 +502,26 @@ void app.whenReady().then(async () => {
   if (browserExtensionRequired(getConfig())) {
     void startBridge();
   }
-  if (getConfig().ui.autoConnect) void connect();
+  if (hostMode === 'headless' || getConfig().ui.autoConnect) void connect();
 
   // Never awaited: an unreachable GitHub, a slow download or a broken release must not delay a
   // window that is already on screen. Everything it learns arrives through the ordinary state
   // push, every failure ends inside it, and its own timer keeps it running for a tray app that
   // is never restarted.
-  startUpdateChecks();
+  if (desktopPresentation) startUpdateChecks();
   // Warm the existing derived cache once, after startup, without delaying the UI.
   // A visit to Usage joins this same calculation; unchanged recordings cost no reads.
-  void usageOverview(usageWarmup.signal).catch((error: Error) => {
-    if (!usageWarmup.signal.aborted) logWarn(`usage background refresh failed: ${error.message}`);
-  });
+  if (desktopPresentation) {
+    void usageOverview(usageWarmup.signal).catch((error: Error) => {
+      if (!usageWarmup.signal.aborted) logWarn(`usage background refresh failed: ${error.message}`);
+    });
+  }
 });
 
 app.on('before-quit', () => {
   if (!ownsAppRuntime(hasSingleInstanceLock)) return;
   quitting = true;
+  void publishRuntimeStatus('stopping').catch(error => logWarn(`Core stopping snapshot: ${error instanceof Error ? error.message : String(error)}`));
   // From this point `will-quit` owns a bounded teardown. A Dock click/relaunch arriving while
   // that sequence drains must not recreate or reveal a window after the tray has disappeared.
   windowActivation.disable();
@@ -473,6 +530,7 @@ app.on('before-quit', () => {
 
 app.on('window-all-closed', () => {
   if (!ownsAppRuntime(hasSingleInstanceLock)) return;
+  if (!desktopPresentation) return;
   // macOS convention: closing the last window is not quitting the application. The Dock/menu
   // bar stay alive and `activate` recreates it. Windows/Linux retain the explicit close-to-tray
   // preference; Cmd+Q / app.quit bypasses this event and still enters the shutdown sequence.
@@ -524,10 +582,13 @@ app.on('will-quit', (event) => {
       // running with nothing to click and the single-instance lock still held.
       exit: () => {
         // The sequence has just logged its completion; a phase inside it would flush too early.
-        void flushLogBeforeExit().finally(() => {
-          shutdownComplete = true;
-          app.exit(0);
-        });
+        void publishRuntimeStatus('stopped')
+          .catch(error => logWarn(`Core stopped snapshot: ${error instanceof Error ? error.message : String(error)}`))
+          .finally(() => flushLogBeforeExit())
+          .finally(() => {
+            shutdownComplete = true;
+            app.exit(0);
+          });
       }
     }
   );
@@ -535,7 +596,7 @@ app.on('will-quit', (event) => {
 
 // Belt and braces: no web contents anywhere in this app may open a window or
 // navigate. External links go through the vetted allowlist in ipc.ts instead.
-app.on('web-contents-created', (_event, contents) => {
+if (desktopPresentation) app.on('web-contents-created', (_event, contents) => {
   contents.setWindowOpenHandler(() => ({ action: 'deny' }));
   contents.on('will-navigate', (event) => event.preventDefault());
   contents.on('will-redirect', (event) => event.preventDefault());

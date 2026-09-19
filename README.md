@@ -28,6 +28,25 @@
 
 <p align="center"><strong>Uses your ChatGPT conversation rather than invoking Codex directly.</strong><br /><sub>ChatGPT Work and Codex share usage limits. Your account’s model availability, usage and context limits still apply. <a href="https://learn.chatgpt.com/docs/pricing">OpenAI usage details →</a></sub></p>
 
+## Lightweight headless Core
+
+The Desktop workspace is optional. A packaged Windows build can run the same authoritative Core
+without creating a window, renderer or tray:
+
+```powershell
+chat-core status
+chat-core start
+chat-core stop
+```
+
+`start` launches `Chat On Steroids.exe --headless`. Session history, Goal/Loop, Compact & Resume,
+the browser bridge, Core MCP surface and tunnel lifecycle keep the same owners and durable formats.
+Headless mode intentionally does not publish or prewarm the optional Desktop/Plugins connectors;
+their saved settings remain intact for normal Desktop mode.
+`stop` asks the existing primary process to use its normal bounded shutdown path rather than
+killing it. The CLI status file contains only operator-safe state; it excludes connector URLs,
+secret path segments and provider credentials.
+
 ## Responsible use and provider rules
 
 Chat On Steroids is an independent, open-source workspace for coding and other authorized tasks with your own files and tools. It is intended to support productive work within the rules of the services you use. **It is not intended to bypass usage limits, account restrictions or safety controls.**

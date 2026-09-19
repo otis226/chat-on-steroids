@@ -63,6 +63,16 @@ let connectionGeneration = 0;
  * briefly bringing a connector online while the app is already leaving.
  */
 let shutdownRequested = false;
+/** Headless Core may intentionally suppress optional Desktop/Plugins surfaces at runtime. */
+let coreOnlyRuntime = false;
+
+export function setCoreOnlyRuntime(enabled: boolean): void {
+  coreOnlyRuntime = enabled;
+}
+
+function runtimeSurfaceAvailable(id: SurfaceId, caps: ReturnType<typeof effectiveCapabilities>): boolean {
+  return (!coreOnlyRuntime || id === 'core') && surfaceIsUseful(id, caps);
+}
 
 function enqueueLifecycle(operation: () => Promise<void>): Promise<void> {
   const run = lifecycleQueue.then(operation, operation);
@@ -112,7 +122,7 @@ function describeSurfaces(): SurfaceStatus[] {
   // endpoint for them to describe; a fresh connect will populate its own generation again.
   const running = endpoint !== null;
   return SURFACE_LIST.map((surface) => {
-    const available = surfaceIsUseful(surface.id, caps);
+    const available = runtimeSurfaceAvailable(surface.id, caps);
     const previous = status.surfaces.find((entry) => entry.id === surface.id);
     return {
       id: surface.id,
@@ -146,6 +156,7 @@ function desktopUnavailableDetail(id: SurfaceId): string {
 
 /** The tools this surface would advertise right now, for the "what you get" list. */
 function toolsFor(id: SurfaceId): string[] {
+  if (coreOnlyRuntime && id !== 'core') return [];
   if (id === 'plugins') return pluginManager.tools().map(tool => tool.name);
   const config = getConfig();
   const caps = effectiveCapabilities(config);
@@ -274,7 +285,7 @@ async function connectImpl(): Promise<void> {
       return;
     }
     setStatus({ localUrl: endpoint.url, surfaces: describeSurfaces() });
-    if (desktopAutomationSupported() && (caps.screen || caps.control)) void prewarmComputerHelper();
+    if (!coreOnlyRuntime && desktopAutomationSupported() && (caps.screen || caps.control)) void prewarmComputerHelper();
     updateSurface('core', { state: 'starting', detail: 'Connecting…' });
 
     const apiKey = await getSecret(setupApiKeySlot(config.tunnel.profileId));
@@ -427,14 +438,14 @@ async function applySettingsImpl(): Promise<void> {
     return;
   }
   const caps = effectiveCapabilities(config);
-  if (desktopAutomationSupported() && (caps.screen || caps.control)) void prewarmComputerHelper();
+  if (!coreOnlyRuntime && desktopAutomationSupported() && (caps.screen || caps.control)) void prewarmComputerHelper();
   // Rebuild the cards first: permissions may have changed which tools each surface would
   // advertise, and on a whole-origin transport that is all there is to do.
   setStatus({ surfaces: describeSurfaces() });
 
   if (config.tunnel.kind !== 'openai') {
     for (const id of optionalSurfaces) {
-      if (!surfaceIsUseful(id, caps)) continue;
+      if (!runtimeSurfaceAvailable(id, caps)) continue;
       const surface = status.surfaces.find((entry) => entry.id === id);
       updateSurface(id, {
         publicUrl: siblingPublicUrl(status.publicUrl, surface?.localUrl ?? null),
@@ -446,7 +457,7 @@ async function applySettingsImpl(): Promise<void> {
   }
 
   for (const id of optionalSurfaces) {
-    if (!surfaceIsUseful(id, caps)) {
+    if (!runtimeSurfaceAvailable(id, caps)) {
       await stopOptionalTunnel(id, 'Turn a desktop permission back on to publish this connector.');
       continue;
     }

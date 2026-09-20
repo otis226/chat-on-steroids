@@ -239,7 +239,8 @@ function execPrincipal(): string | null {
   return executionPrincipal(
     caller.requestId,
     caller.sessionId ?? null,
-    currentCall()?.allowUnattributed ?? getConfig().multiAgent.allowUnattributedCalls
+    currentCall()?.allowUnattributed ?? getConfig().multiAgent.allowUnattributedCalls,
+    caller.transportKey
   );
 }
 

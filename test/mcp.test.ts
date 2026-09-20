@@ -3444,6 +3444,42 @@ describe('exec sessions belong to the chat that opened them', () => {
     expect(textOf(directRead)).toContain('direct-result');
   });
 
+  it('keeps one native ChatGPT terminal owner across different request ids without page attribution', async () => {
+    const nativeSession = 'opaque-native-terminal-chat';
+    const started = await modern('tools/call', {
+      name: 'exec_command',
+      arguments: {
+        cmd: IS_WINDOWS
+          ? "Start-Sleep -Milliseconds 700; Write-Output 'native-owner-finished'"
+          : "sleep 0.7; printf '%s\\n' native-owner-finished",
+        workdir: '/workspace',
+        yield_time_ms: 250
+      }
+    }, { 'x-request-id': 'native-request-a', 'x-openai-session': nativeSession });
+    expect(failed(started), textOf(started)).toBe(false);
+    const sessionId = Number(textOf(started).match(/Process running with session ID (\d+)/)?.[1]);
+    expect(Number.isInteger(sessionId), textOf(started)).toBe(true);
+
+    const stranger = await modern('tools/call', {
+      name: 'write_stdin', arguments: { session_id: sessionId, chars: '', yield_time_ms: 250 }
+    }, { 'x-request-id': 'native-request-stranger', 'x-openai-session': 'opaque-native-other-chat' });
+    expect(failed(stranger)).toBe(true);
+    expect(textOf(stranger)).toContain('EXEC_SESSION_OWNER_MISMATCH');
+
+    const sameChat = await modern('tools/call', {
+      name: 'write_stdin', arguments: { session_id: sessionId, chars: '', yield_time_ms: 5_000 }
+    }, { 'x-request-id': 'native-request-b', 'x-openai-session': nativeSession });
+    expect(failed(sameChat), textOf(sameChat)).toBe(false);
+    expect(textOf(sameChat)).toContain('native-owner-finished');
+    const settled = textOf(sameChat).includes('Process exited with code 0')
+      ? sameChat
+      : await modern('tools/call', {
+          name: 'write_stdin', arguments: { session_id: sessionId, chars: '', yield_time_ms: 5_000 }
+        }, { 'x-request-id': 'native-request-c', 'x-openai-session': nativeSession });
+    expect(failed(settled), textOf(settled)).toBe(false);
+    expect(textOf(settled)).toContain('Process exited with code 0');
+  });
+
   it('reoffers completed output after the real HTTP connection closes before publication', async () => {
     const requestId = 'wfr_background_disconnect';
     expect(prove(requestId, 'conv-background-disconnect')).toBe('stored');

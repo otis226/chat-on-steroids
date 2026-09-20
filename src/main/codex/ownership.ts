@@ -45,6 +45,9 @@ const NOTICES_PER_KIND = 3;
 /** Owners, keyed by the process id `exec_command` handed back as `session_id`. */
 const owners = new Map<number, string | null>();
 const REQUEST_PRINCIPAL_PREFIX = 'request:';
+const TRANSPORT_PRINCIPAL_PREFIX = 'transport:';
+/** Native transport principals may later gain an exact durable local session alias. */
+const transportSessions = new Map<string, string>();
 
 /** When each owned session was last started or polled, keyed the same way. */
 const attendedAt = new Map<number, number>();
@@ -66,10 +69,20 @@ function requestIdOfPrincipal(principal: string | null | undefined): string | nu
     : null;
 }
 
+function transportPrincipal(transportKey: string): string {
+  return `${TRANSPORT_PRINCIPAL_PREFIX}${transportKey}`;
+}
+
+function isTransportPrincipal(principal: string | null | undefined): principal is string {
+  return Boolean(principal?.startsWith(TRANSPORT_PRINCIPAL_PREFIX));
+}
+
 function sessionOfPrincipal(principal: string | null | undefined): string | null {
   if (!principal) return null;
   const requestId = requestIdOfPrincipal(principal);
-  return requestId ? requestCorrelation(requestId)?.sessionId ?? null : principal;
+  if (requestId) return requestCorrelation(requestId)?.sessionId ?? null;
+  if (isTransportPrincipal(principal)) return transportSessions.get(principal) ?? null;
+  return principal;
 }
 
 function samePrincipal(left: string | null | undefined, right: string | null | undefined): boolean {
@@ -84,9 +97,15 @@ function samePrincipal(left: string | null | undefined, right: string | null | u
 export function executionPrincipal(
   requestId: string | null | undefined,
   sessionId: string | null | undefined,
-  allowUnattributed: boolean
+  allowUnattributed: boolean,
+  transportKey?: string | null
 ): string | null {
   const exact = provenSession(requestId ?? null, sessionId ?? null);
+  if (transportKey) {
+    const principal = transportPrincipal(transportKey);
+    if (exact) transportSessions.set(principal, exact);
+    return principal;
+  }
   if (exact) return exact;
   if (allowUnattributed && requestId) return requestPrincipal(requestId);
   return null;
@@ -141,9 +160,13 @@ export function noteExecAttended(processId: number | null): void {
 /** Drops custody only when the manager discards the process and its retained result. */
 export function forgetExecOwner(processId: number | null): void {
   if (processId === null) return;
+  const prior = owners.get(processId);
   owners.delete(processId);
   attendedAt.delete(processId);
   noticeOffers.delete(processId);
+  if (isTransportPrincipal(prior) && ![...owners.values()].some(owner => owner === prior)) {
+    transportSessions.delete(prior);
+  }
 }
 
 /** The exact session or temporary request principal that opened this process. */
@@ -251,6 +274,7 @@ export function resetExecOwnershipForTests(): void {
   owners.clear();
   attendedAt.clear();
   noticeOffers.clear();
+  transportSessions.clear();
 }
 
 /** Test seam: backdating one clock beats faking time around real child processes. */

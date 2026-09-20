@@ -151,6 +151,33 @@ describe('live process ownership across chat replacement', () => {
     expect(execOwnershipFailure(104, 'session-other')).toBe('different-owner');
   });
 
+  it('uses native transport identity across request ids and aliases it to the durable session when proof arrives', () => {
+    const first = executionPrincipal('uuid-request-a', null, true, 'openai-session-chat-a');
+    expect(first).toBe('transport:openai-session-chat-a');
+    noteExecOwner(106, first);
+
+    const laterSameChat = executionPrincipal('uuid-request-b', null, true, 'openai-session-chat-a');
+    expect(execOwnershipFailure(106, laterSameChat)).toBeNull();
+    expect(execOwnershipFailure(106, executionPrincipal('uuid-request-c', null, true, 'openai-session-chat-b')))
+      .toBe('different-owner');
+
+    expect(observeRequestCorrelation({
+      requestId: 'uuid-request-b', conversationId: 'conv-transport-a', sessionId: 'session-transport-a',
+      messageId: 'msg-transport-a', tool: 'write_stdin', observedAt: Date.now()
+    })).toBe('stored');
+    const boundA = executionPrincipal('uuid-request-b', null, true, 'openai-session-chat-a');
+    expect(boundA).toBe('transport:openai-session-chat-a');
+
+    // Compact & Resume may change the provider transport key while retaining the same durable
+    // local session. Once exact proof lands, both native principals remain equivalent.
+    expect(observeRequestCorrelation({
+      requestId: 'uuid-request-resume', conversationId: 'conv-transport-b', sessionId: 'session-transport-a',
+      messageId: 'msg-transport-b', tool: 'write_stdin', observedAt: Date.now()
+    })).toBe('stored');
+    const resumed = executionPrincipal('uuid-request-resume', null, true, 'openai-session-chat-a-resumed');
+    expect(execOwnershipFailure(106, resumed)).toBeNull();
+  });
+
   it('keeps an unresolved request out of a process it did not open, then admits it after exact proof', () => {
     noteExecOwner(105, 'session-owner');
     expect(execOwnershipFailure(105, 'request:wfr_unknown')).toBe('unidentified');

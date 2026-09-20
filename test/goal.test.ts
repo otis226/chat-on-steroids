@@ -262,55 +262,6 @@ describe('what leaves this machine', () => {
     ]);
   });
 
-  it('feeds Jev advice into the normal Goal driver without giving Jev decision authority', async () => {
-    const config = defaultConfig();
-    await saveConfig({
-      ...config,
-      goal: {
-        ...config.goal,
-        enabled: true,
-        backend: 'api',
-        loopBackend: 'api',
-        jevEnabled: true,
-        model: 'deepseek/deepseek-v4-flash'
-      }
-    });
-    await setSecret('typeSafeApiKey', 'jev-test-key');
-    const session = await createSession({ title: 'Jev Goal integration', conversationId: 'jev-goal-integration' });
-    await appendEvent(session.id, { time: 100, source: 'extension', kind: 'user_message',
-      message: { text: 'Implement the feature and verify it', chars: 35, truncated: false } });
-    await appendEvent(session.id, { time: 110, source: 'extension', kind: 'assistant_message', messageId: 'jev-progress', final: true,
-      message: { text: 'Implementation is complete but verification is still pending.', chars: 59, truncated: false } });
-
-    const calls: unknown[] = [];
-    globalThis.fetch = vi.fn(async (_url, init) => {
-      const body = JSON.parse(String(init?.body));
-      calls.push(body);
-      if (body.questions) {
-        return Response.json({
-          model: 'jev-test',
-          answers: {
-            completion_state: { type: 'choice', choice: 'verification_gap', confidence: 0.94,
-              probabilities: { complete: 0.01, unfinished: 0.03, verification_gap: 0.94, user_blocked: 0.01, uncertain: 0.01 } },
-            next_focus: { type: 'choice', choice: 'verification', confidence: 0.96,
-              probabilities: { missing_requirement: 0.01, repair_failure: 0.01, verification: 0.96, answer_from_context: 0.01, none: 0.01 } },
-            should_continue: { type: 'noul', noul: 0.97 }
-          },
-          usage: { input_tokens: 40, output_tokens: 8 }
-        });
-      }
-      const systems = body.messages.filter((message: { role: string }) => message.role === 'system')
-        .map((message: { content: string }) => message.content).join('\n');
-      expect(systems).toContain('# Jev semantic advisor (advisory only)');
-      expect(systems).toContain('completion_state: verification_gap (94%)');
-      return decision('continue', 'Run the requested verification and fix any failure.');
-    });
-
-    expect(await goal.draftFastFollowup(session.id, undefined, undefined, undefined, 'goal'))
-      .toBe('Run the requested verification and fix any failure.');
-    expect(calls).toHaveLength(2);
-  });
-
   /**
    * The privacy boundary. The goal model decides whether the user's request has been met,
    * and the conversation is the only evidence it needs for that — every tool call,

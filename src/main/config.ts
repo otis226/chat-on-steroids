@@ -130,7 +130,6 @@ export { DEFAULT_GOAL_MODEL } from '../shared/goal.js';
 const DEFAULT_GOAL: GoalSettings = {
   backend: 'chatgpt',
   loopBackend: 'chatgpt',
-  jevEnabled: false,
   impulseMinutes: 0,
   includeToolCalls: false,
   helperModel: 'gpt-5.6-sol',
@@ -358,7 +357,6 @@ const configSchema = z.object({
       enabled: z.boolean().optional().default(DEFAULT_GOAL.enabled),
       backend: z.enum(['api', 'chatgpt', 'templates']).optional().default('chatgpt'),
       loopBackend: z.enum(['api', 'chatgpt']).optional().default('chatgpt'),
-      jevEnabled: z.boolean().optional().default(false),
       helperModel: z.string().trim().min(1).max(80).optional().default('gpt-5.6-sol').catch('gpt-5.6-sol'),
       helperReasoning: z.enum(REASONING_EFFORTS).optional().default('high').catch('high'),
       // Repaired rather than rejected for the same reason `reasoning` below is: a config
@@ -426,7 +424,7 @@ const configSchema = z.object({
         .catch(DEFAULT_GOAL.loopPrompt)
     })
     .optional()
-    .default({ ...DEFAULT_GOAL, backend: 'chatgpt', loopBackend: 'chatgpt', jevEnabled: false, impulseMinutes: 0, includeToolCalls: false, helperModel: 'gpt-5.6-sol', helperReasoning: 'high' }),
+    .default({ ...DEFAULT_GOAL, backend: 'chatgpt', loopBackend: 'chatgpt', impulseMinutes: 0, includeToolCalls: false, helperModel: 'gpt-5.6-sol', helperReasoning: 'high' }),
   mcp: z
     .object({
       // Repaired rather than rejected, like the Goal prompts above: this is free text a person

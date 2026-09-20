@@ -53,7 +53,6 @@ import { getConfig } from './config.js';
 import { writeDurableNow, writeDurableSoon } from './durable.js';
 import { logInfo, logWarn } from './logger.js';
 import { getSecret } from './secrets.js';
-import { semanticAdviceForGoal } from './goal-semantic-advisor.js';
 import { findSessionByConversation, getSession, readEvents, readHandoff, readRecentEvents, turnHasMcpCall } from './session/store.js';
 import { foldProgress } from '../shared/session.js';
 import { isAstraModel, isProModel } from '../shared/chat-models.js';
@@ -1555,8 +1554,6 @@ interface GoalRequest {
    * is sent and in how the answer is read: see requestDrivingDecision.
    */
   mode: GoalMode;
-  /** Explicit finish line when this chat carries one; advisory only and never a state owner. */
-  objective?: string;
   /** In order, ahead of the conversation. The wire protocol is appended here, not by callers. */
   system: string[];
   messages: ChatMessage[];
@@ -1704,21 +1701,13 @@ async function requestGoalDecision(request: GoalRequest): Promise<GoalDecision |
 async function requestDrivingDecision(
   request: GoalRequest
 ): Promise<GoalDecision | { action: 'http'; error: string; retryAfterMs?: number }> {
-  request.signal.throwIfAborted();
-  const advice = request.lifetime === 'temporary-planner' ? null : await semanticAdviceForGoal({
-    mode: request.mode,
-    objective: request.objective,
-    messages: request.messages.map(({ role, content }) => ({ role, content }))
-  });
-  request.signal.throwIfAborted();
-  const advised = advice ? { ...request, system: [...request.system, advice] } : request;
-  let decision = await requestGoalDecision(advised);
+  let decision = await requestGoalDecision(request);
   if (request.mode !== 'loop') return decision;
   for (let attempt = 1; attempt < LOOP_ATTEMPTS && decision.action === 'stop'; attempt += 1) {
     logWarn(`goal: the loop tried to stop with ${request.model}; asking again (${attempt}/${LOOP_ATTEMPTS - 1})`);
     decision = await requestGoalDecision({
-      ...advised,
-      system: [...advised.system, GOAL_LOOP_STOP_REFUSED]
+      ...request,
+      system: [...request.system, GOAL_LOOP_STOP_REFUSED]
     });
   }
   return decision;
@@ -1761,7 +1750,6 @@ async function run(draft: GoalDraft): Promise<void> {
       key: key ?? '',
       model: draft.model,
       mode: draft.mode,
-      objective: draft.objective,
       // Loop replaces the instruction, not the goal: a chat that carries one still hands it
       // over verbatim, which is what "here is the task" in that prompt refers to. Without one
       // the loop reads the job out of the conversation, exactly as the gate does.
@@ -1877,7 +1865,7 @@ export async function draftFastFollowup(sessionId: string, signal: AbortSignal =
   const prompt = mode === 'loop' ? settings.loopPrompt : objective ? settings.objectivePrompt : settings.prompt;
   const decision = backend === 'templates'
     ? templateGoalDecision(messages.filter(message => message.role === 'assistant').at(-1)?.content ?? '', Math.floor(Math.random() * 200), Math.floor(Math.random() * 200))
-    : await requestDrivingDecision({ sourceSessionId: sessionId, backend, endpoint, reasoning: settings.reasoning, key: key ?? '', model: settings.model, mode, objective,
+    : await requestDrivingDecision({ sourceSessionId: sessionId, backend, endpoint, reasoning: settings.reasoning, key: key ?? '', model: settings.model, mode,
     system: objective ? [prompt, goalObjectiveMessage(objective)] : [prompt],
     messages,
     trailer: mode === 'loop' ? GOAL_LOOP_TRAILER : objective ? GOAL_OBJECTIVE_TRAILER : GOAL_SYSTEM_TRAILER, signal, publish })
@@ -1948,7 +1936,6 @@ export async function draftOpeningMessage(
       key: key ?? '',
       model,
       mode,
-      objective: goal,
       system: [
         mode === 'loop' ? settings.loopPrompt : settings.objectivePrompt,
         goalObjectiveMessage(goal)

@@ -8,7 +8,7 @@ import { nonZeroExitIsBenign } from '../src/main/exec-hints.js';
 const managers: UnifiedExecProcessManager[] = [];
 const policy = { kind: 'tokens' as const, tokens: 10_000 };
 afterEach(async () => { vi.restoreAllMocks(); await Promise.all(managers.splice(0).map(m => m.terminateAllProcesses())); });
-function manager() { const m = new UnifiedExecProcessManager(5000); managers.push(m); return m; }
+function manager(maxProcesses?: number) { const m = new UnifiedExecProcessManager(5000, maxProcesses); managers.push(m); return m; }
 function start(m: UnifiedExecProcessManager, code: string, yieldTimeMs = 10000) {
   const processId = m.allocateProcessId();
   return m.execCommand({ processId, command: [process.execPath, '-e', code], shellType: 'bash',
@@ -51,6 +51,45 @@ it('rereads all retained output after automatic delivery and a later receipt', a
   const reread = await poll(m, id);
   expect(reread.rawOutput.toString()).toBe('early\nlate\n');
   expect(await m.offerCompletedOutput(owned, { completedAt: null, failed: false }, 1000)).toBeNull();
+});
+
+it('archives exited unread sessions before the live-session cap blocks later commands', async () => {
+  const m = manager(2);
+  const [first, second] = await Promise.all([
+    start(m, "setTimeout(()=>process.stdout.write('first-late'),700)", 250),
+    start(m, "setTimeout(()=>process.stdout.write('second-late'),700)", 250)
+  ]);
+  const firstId = first.processId!;
+  const secondId = second.processId!;
+  expect(firstId).not.toBeNull();
+  expect(secondId).not.toBeNull();
+  await Promise.all([first.completion, second.completion]);
+
+  // Before this regression fix both exited rows still occupied the two live reservations,
+  // so allocating this third command created reservation #3 and ensureProcessCapacity failed.
+  const third = await start(m, "process.stdout.write('third')");
+  expect(third.exitCode).toBe(0);
+  expect(third.rawOutput.toString()).toBe('third');
+
+  const owned = new Set([firstId, secondId]);
+  expect(m.backgroundState(owned).exitedUnread.map(row => row.processId).sort((a, b) => a - b))
+    .toEqual([firstId, secondId].sort((a, b) => a - b));
+
+  const publication = { completedAt: null as number | null, failed: false };
+  expect(await m.offerCompletedOutput(new Set([firstId]), publication, 1000)).toMatchObject({
+    processId: firstId,
+    output: 'first-late'
+  });
+  publication.completedAt = 100;
+  expect(await m.acknowledgeCompletedOutput(new Set([firstId]), 101)).toEqual([firstId]);
+
+  const consumed = await poll(m, secondId);
+  expect(consumed.rawOutput.toString()).toBe('second-late');
+  expect(consumed.replayed).not.toBe(true);
+  expect(m.backgroundState(owned).exitedUnread).toEqual([]);
+  const reread = await poll(m, secondId);
+  expect(reread.replayed).toBe(true);
+  expect(reread.rawOutput.toString()).toBe('second-late');
 });
 
 it('bounds reread output, releases oldest completed custody, and keeps unread results separate', async () => {

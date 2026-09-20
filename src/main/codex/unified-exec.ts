@@ -695,7 +695,26 @@ interface ProcessEntry {
   tty: boolean;
   initialExecCommandActive: boolean;
   /** Cursor into this process's own completed buffer; offers never consume bytes. */
-  delivery?: { offset: number; offer?: { end: number; publication: OutputPublication } };
+  delivery?: DeliveryState;
+}
+
+interface DeliveryState {
+  offset: number;
+  offer?: { end: number; publication: OutputPublication };
+}
+
+interface CompletedEntry
+  extends Pick<ExecCommandToolOutput, 'rawOutput' | 'displayOutput' | 'exitCode' | 'benignExit'> {
+  identity: object;
+  hookCommand: string;
+  /**
+   * Output that had not yet been delivered when an exited live row was archived to free
+   * terminal capacity. This is intentionally separate from rawOutput/displayOutput, which
+   * preserve the full bounded history for later explicit rereads.
+   */
+  pendingOutput?: Buffer;
+  delivery?: DeliveryState;
+  unread: boolean;
 }
 
 /** Local response completion, not a claim that a remote model understood the output. */
@@ -721,13 +740,15 @@ export interface BackgroundExecState {
 
 export class UnifiedExecProcessManager {
   private readonly processes = new Map<number, ProcessEntry>();
-  private readonly completed = new Map<number, Pick<ExecCommandToolOutput, 'rawOutput' | 'displayOutput' | 'exitCode' | 'benignExit'> & { identity: object }>();
+  private readonly completed = new Map<number, CompletedEntry>();
   private releaseListener?: (processId: number) => void;
   private readonly reservedProcessIds = new Set<number>();
   private readonly maxWriteStdinYieldTimeMs: number;
+  private readonly maxProcesses: number;
 
-  constructor(maxWriteStdinYieldTimeMs: number) {
+  constructor(maxWriteStdinYieldTimeMs: number, maxProcesses = MAX_UNIFIED_EXEC_PROCESSES) {
     this.maxWriteStdinYieldTimeMs = Math.max(maxWriteStdinYieldTimeMs, MIN_EMPTY_YIELD_TIME_MS);
+    this.maxProcesses = Math.max(1, Math.floor(maxProcesses));
   }
 
   /** The custody registry drops ownership only when this manager really discards an id. */
@@ -737,6 +758,11 @@ export class UnifiedExecProcessManager {
 
   /** `rand::rng().random_range(1_000..100_000)`, retried against the reservations. */
   allocateProcessId(): number {
+    // A completed background command must not keep consuming one of the live terminal slots
+    // merely because nobody explicitly polled it yet. Move only exited, fully-closed, idle
+    // rows into the bounded completed-history store. Their unread output obligation survives
+    // there and can still be auto-delivered or consumed with write_stdin.
+    this.archiveExitedProcesses();
     for (;;) {
       const processId = 1_000 + Math.floor(Math.random() * (100_000 - 1_000));
       if (this.reservedProcessIds.has(processId) || this.completed.has(processId)) continue;
@@ -752,18 +778,43 @@ export class UnifiedExecProcessManager {
     this.releaseListener?.(processId);
   }
 
-  private retainCompleted(entry: ProcessEntry): void {
+  private retainCompleted(entry: ProcessEntry, unread = false): void {
     const rawOutput = Buffer.from(entry.process.retainedOutput());
     const exitCode = entry.process.exitCode();
+    const pendingOutput = unread ? entry.process.completedOutput() : null;
     this.processes.delete(entry.processId);
     this.reservedProcessIds.delete(entry.processId);
     this.completed.set(entry.processId, {
       identity: entry.process.identity,
+      hookCommand: entry.hookCommand,
       rawOutput, exitCode,
       ...(entry.batchMarker ? { displayOutput: new CommandBatchDisplay(entry.batchMarker).push(rawOutput, true) } : {}),
-      benignExit: entry.process.benignExit(entry.classifyExit)
+      benignExit: entry.process.benignExit(entry.classifyExit),
+      ...(pendingOutput === null ? {} : { pendingOutput: Buffer.from(pendingOutput) }),
+      ...(entry.delivery ? { delivery: entry.delivery } : {}),
+      unread
     });
     while (this.completed.size > MAX_COMPLETED_EXEC_RESULTS) this.releaseProcessId(this.completed.keys().next().value!);
+  }
+
+  /**
+   * Reclaim capacity from background sessions that have already exited without discarding
+   * their unread result. Busy rows are skipped so a concurrent write_stdin keeps exclusive
+   * ownership of the draining buffer; the next admission attempt can retry them.
+   */
+  private archiveExitedProcesses(): void {
+    for (const entry of [...this.processes.values()]) {
+      if (entry.initialExecCommandActive || !entry.process.hasExited() || !entry.process.outputClosed) continue;
+      const release = entry.process.interactionLock.tryLock();
+      if (!release) continue;
+      try {
+        if (this.processes.get(entry.processId) !== entry) continue;
+        if (entry.initialExecCommandActive || !entry.process.hasExited() || !entry.process.outputClosed) continue;
+        this.retainCompleted(entry, true);
+      } finally {
+        release();
+      }
+    }
   }
 
   async execCommand(request: ExecCommandRequest): Promise<ExecCommandToolOutput> {
@@ -882,6 +933,22 @@ export class UnifiedExecProcessManager {
       if (!saved) return null;
       if (identity && saved.identity !== identity) throw UnifiedExecError.unknownProcessId(request.processId);
       if (request.input !== '') throw UnifiedExecError.processFailed('Process already completed; no input was sent. Use empty chars to read its retained output.');
+      if (saved.unread) {
+        const pending = saved.pendingOutput ?? Buffer.alloc(0);
+        const offset = Math.min(saved.delivery?.offset ?? 0, pending.length);
+        const remaining = pending.subarray(offset);
+        saved.unread = false;
+        saved.delivery = { offset: pending.length };
+        return {
+          ...saved,
+          rawOutput: remaining,
+          ...(saved.displayOutput ? { displayOutput: remaining } : {}),
+          chunkId: generateChunkId(), wallTimeMs: 0, processId: null,
+          completedSessionId: request.processId,
+          originalTokenCount: approxTokenCount(remaining.toString('utf8')),
+          outputOmittedBytes: null, truncationPolicy: request.truncationPolicy, maxOutputTokens: request.maxOutputTokens
+        };
+      }
       return { ...saved, chunkId: generateChunkId(), wallTimeMs: 0, processId: null,
         completedSessionId: request.processId, replayed: true, originalTokenCount: approxTokenCount((saved.displayOutput ?? saved.rawOutput).toString('utf8')),
         outputOmittedBytes: null, truncationPolicy: request.truncationPolicy, maxOutputTokens: request.maxOutputTokens };
@@ -1028,6 +1095,9 @@ export class UnifiedExecProcessManager {
         running.push(entry.processId);
       }
     }
+    for (const [processId, entry] of this.completed) {
+      if (entry.unread && processIds.has(processId)) exitedUnread.push({ processId, exitCode: entry.exitCode });
+    }
     return {
       running: running.sort((left, right) => left - right),
       exitedUnread: exitedUnread.sort((left, right) => left.processId - right.processId)
@@ -1044,6 +1114,20 @@ export class UnifiedExecProcessManager {
     const retired: number[] = [];
     for (const id of processIds) {
       if (id === except) continue; // Explicit polling still owns its normal result path.
+      const saved = this.completed.get(id);
+      if (saved?.unread && saved.delivery?.offer) {
+        const offered = saved.delivery.offer;
+        if (!offered.publication.failed && offered.publication.completedAt !== null &&
+            startedAt > offered.publication.completedAt) {
+          const output = saved.pendingOutput ?? Buffer.alloc(0);
+          saved.delivery = { offset: offered.end };
+          if (offered.end >= output.length) {
+            saved.unread = false;
+            retired.push(id);
+          }
+        }
+        continue;
+      }
       const entry = this.processes.get(id);
       if (!entry?.delivery?.offer) continue;
       const release = await entry.process.interactionLock.lock();
@@ -1073,6 +1157,19 @@ export class UnifiedExecProcessManager {
   ): Promise<CompletedOutputPage | null> {
     if (publication.failed || maxBytes < 4) return null;
     for (const { processId } of this.backgroundState(processIds).exitedUnread) {
+      const saved = this.completed.get(processId);
+      if (saved?.unread) {
+        const output = saved.pendingOutput ?? Buffer.alloc(0);
+        const delivery = saved.delivery ??= { offset: 0 };
+        if (delivery.offer && !delivery.offer.publication.failed) continue;
+        const start = delivery.offset;
+        let end = Math.min(output.length, start + Math.floor(maxBytes));
+        while (end > start && end < output.length && (output[end]! & 0xc0) === 0x80) end--;
+        if (end === start && output.length > start) continue;
+        delivery.offer = { end, publication };
+        return { processId, command: saved.hookCommand, exitCode: saved.exitCode,
+          output: output.subarray(start, end).toString('utf8'), start, end, total: output.length };
+      }
       const entry = this.processes.get(processId);
       if (!entry) continue;
       const release = await entry.process.interactionLock.lock();
@@ -1138,13 +1235,13 @@ export class UnifiedExecProcessManager {
     return { kind: 'alive', exitCode, processId: entry.processId };
   }
 
-  /** Capacity is admission, never garbage collection: every retained row still owes output. */
+  /** Capacity bounds live/in-flight sessions; exited unread output lives in bounded history. */
   private ensureProcessCapacity(requestProcessId: number): void {
     // Reservations participate in the hard cap, so concurrent exec_command calls cannot
     // each observe one free slot and collectively insert a 65th live process.
-    if (this.reservedProcessIds.size > MAX_UNIFIED_EXEC_PROCESSES) {
+    if (this.reservedProcessIds.size > this.maxProcesses) {
       throw UnifiedExecError.createProcess(
-        `too many retained terminal sessions (limit ${MAX_UNIFIED_EXEC_PROCESSES}); drain a returned session with write_stdin before starting another`
+        `too many active terminal sessions (limit ${this.maxProcesses}); poll or terminate an existing running session before starting another`
       );
     }
     if (!this.reservedProcessIds.has(requestProcessId)) {

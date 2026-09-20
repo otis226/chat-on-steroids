@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { createHash } from 'node:crypto';
 import type { OutputPublication } from '../codex/unified-exec.js';
 
 /**
@@ -23,7 +24,13 @@ export interface InboundTiming {
   calls: number;
   phases: Record<InboundPhase, number>;
 }
-const store = new AsyncLocalStorage<{ requestId: string | null; timing?: InboundTiming; publication?: OutputPublication }>();
+interface InboundIdentity {
+  requestId: string | null;
+  /** Opaque ChatGPT chat/session identity, hashed at ingress before it enters app state. */
+  transportKey: string | null;
+}
+
+const store = new AsyncLocalStorage<InboundIdentity & { timing?: InboundTiming; publication?: OutputPublication }>();
 
 /** Fixed-size, process-local numbers only: no payload, credential, path or chat identity. */
 export function createInboundTiming(): InboundTiming {
@@ -58,7 +65,17 @@ export function formatInboundTiming(timing: InboundTiming): string {
 
 /** Runs `body` with the request id of the HTTP request currently being served. */
 export function withInboundRequestId<T>(requestId: string | null, body: () => T, timing?: InboundTiming, publication?: OutputPublication): T {
-  return store.run({ requestId, timing, publication }, body);
+  return store.run({ requestId, transportKey: null, timing, publication }, body);
+}
+
+/** Runs one HTTP request with both request correlation and native ChatGPT chat identity. */
+export function withInboundRequestContext<T>(
+  identity: InboundIdentity,
+  body: () => T,
+  timing?: InboundTiming,
+  publication?: OutputPublication
+): T {
+  return store.run({ ...identity, timing, publication }, body);
 }
 
 /** Shared by calls in one HTTP response; socket completion alone is not a remote receipt. */
@@ -69,6 +86,25 @@ export function inboundPublication(): OutputPublication | undefined {
 /** The request id of the HTTP request this call is being served on, if it had one. */
 export function inboundRequestId(): string | null {
   return store.getStore()?.requestId ?? null;
+}
+
+/** Stable opaque current-chat principal supplied by ChatGPT itself, never by tool arguments. */
+export function inboundTransportKey(): string | null {
+  return store.getStore()?.transportKey ?? null;
+}
+
+/**
+ * Converts ChatGPT's opaque `x-openai-session` value into a non-reversible app principal.
+ *
+ * The raw value is transport metadata and may contain provider-private material, so it is
+ * neither logged nor persisted. Duplicate values are ambiguous and fail closed. The full
+ * SHA-256 digest is deterministic across Core restarts and keeps collision risk negligible.
+ */
+export function transportKeyFromHeader(value: string | string[] | undefined): string | null {
+  if (Array.isArray(value) && value.length !== 1) return null;
+  const raw = (Array.isArray(value) ? value[0] : value)?.trim();
+  if (!raw || raw.length > 4096) return null;
+  return `openai-session-${createHash('sha256').update(raw, 'utf8').digest('hex')}`;
 }
 
 /**

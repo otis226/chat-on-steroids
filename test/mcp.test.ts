@@ -594,7 +594,7 @@ describe('surface boundaries', () => {
     everything();
     const names = toolNames(await core('tools/list'));
     // find is absent because exec_command is present — they are mutually exclusive.
-    expect(names).toEqual(['agents', 'apply_patch', 'exec', 'exec_command', 'read', 'update_plan', 'view_image', 'write_stdin']);
+    expect(names).toEqual(['agents', 'apply_patch', 'exec', 'exec_command', 'goal', 'read', 'update_plan', 'view_image', 'write_stdin']);
     for (const name of surfaceDefinition('desktop').tools.filter(name => name !== 'exec')) expect(names, name).not.toContain(name);
   });
 
@@ -638,6 +638,24 @@ describe('surface boundaries', () => {
     // And an ordinary read from a worker's chat carries nothing at all.
     const call1 = await core('tools/call', { name: 'read', arguments: { paths: ['/workspace/src/app.ts'] } });
     expect(failed(call1)).toBe(false);
+  });
+
+  it('binds Goal to native current-chat transport identity and exposes no conversation id field', async () => {
+    everything();
+    const goalTool = toolList(await core('tools/list')).find((tool) => tool.name === 'goal')!;
+    expect(goalTool).toBeTruthy();
+    expect(Object.keys(goalTool.inputSchema.properties).sort()).toEqual(['action', 'mode', 'objective']);
+    expect(JSON.stringify(goalTool.inputSchema)).not.toMatch(/conversation.?id/i);
+
+    const missing = await core('tools/call', { name: 'goal', arguments: { action: 'status' } });
+    expect(failed(missing)).toBe(true);
+    expect(textOf(missing)).toContain('CALLER_IDENTITY_REQUIRED');
+
+    const native = await modern('tools/call', { name: 'goal', arguments: { action: 'status' } }, {
+      'x-openai-session': 'opaque-test-current-chat'
+    });
+    expect(failed(native), textOf(native)).toBe(false);
+    expect(textOf(native)).toContain('Goal for this chat is');
   });
 
   /**
@@ -809,7 +827,7 @@ describe('surface boundaries', () => {
     const desktopTools = toolList(await desktop('tools/list'));
 
     // Each populated surface includes code mode; find and the shell exec pair remain exclusive.
-    expect(coreTools).toHaveLength(8);
+    expect(coreTools).toHaveLength(9);
     expect(desktopTools).toHaveLength(BROWSER_TOOLS.length + (IS_WINDOWS ? 16 : process.platform === 'darwin' ? 3 : 1));
 
     // And the size, which is what a discovery pull actually costs the model on every

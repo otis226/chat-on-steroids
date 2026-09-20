@@ -131,6 +131,11 @@ function coreInstructions(ctx: ToolContext, platform: NodeJS.Platform, skills: s
     'Update the plan when a step is completed or the approach changes. Mark steps completed only when their work is done. Do not repeat the full plan in chat: the app shows the headlines with expandable details above queued messages.',
     'The plan does not execute steps or mark queued instructions done. New user instructions extend the work; update the plan accordingly.'
   );
+  if (sessionTools) lines.push(
+    '',
+    '# Goal',
+    'When the user types `/goal` or explicitly asks to start Goal for this chat, call goal action=start and summarize the current requested finish line in objective. The tool binds itself to the trusted current ChatGPT session; never ask for, infer, copy or pass a conversation id. Use goal stop/clear/status only for this same current chat.'
+  );
   if (agentTools) lines.push(
     '',
     '# Workers',

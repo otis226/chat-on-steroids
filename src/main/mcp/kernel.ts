@@ -23,7 +23,7 @@ import { WINDOWS_COMPUTER_STATE_INPUT_METHODS } from '../../shared/windows-compu
  */
 
 import { rawPromises as fs } from '../rawfs.js';
-import { beginToolTiming, inboundRequestId, inboundPublication } from './inbound.js';
+import { beginToolTiming, inboundRequestId, inboundPublication, inboundTransportKey } from './inbound.js';
 import { McpServer, type ServerContext } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Capabilities, Root } from '../../shared/types.js';
@@ -369,6 +369,11 @@ function requestIdOf(mcpCtx: McpCallContext | undefined): string | null {
   // of truth for the correlation key.
   void mcpCtx;
   return inboundRequestId();
+}
+
+/** Native ChatGPT chat identity wins over the SDK transport session when both exist. */
+function transportKeyOf(mcpCtx: McpCallContext | undefined): string | null {
+  return inboundTransportKey() ?? mcpCtx?.sessionId ?? null;
 }
 
 /**
@@ -1249,7 +1254,7 @@ export function createRegistrar(server: McpServer | null, ctx: ToolContext, surf
         inputSchema: toolSchema(config.inputSchema),
         ...(config.outputSchema ? { outputSchema: toolSchema(config.outputSchema) } : {})
       }, ((args: never, mcpCtx?: McpCallContext) =>
-        dispatch(name, args, mcpCtx?.sessionId ?? null, requestIdOf(mcpCtx), surface, () =>
+        dispatch(name, args, transportKeyOf(mcpCtx), requestIdOf(mcpCtx), surface, () =>
           handler(args)
         )) as never);
     },

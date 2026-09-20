@@ -121,6 +121,35 @@ it('persists Pro Loop delivery across toggles and restart without granting Goal 
   expect(await goal.astraFinishOnly(session.id, id)).toBe(true);
 });
 
+it('binds direct Goal state to a stable transport owner and keeps chats isolated across restore', async () => {
+  const ownerA = goal.goalOwnerForTransportKey('openai-session-chat-a')!;
+  const ownerB = goal.goalOwnerForTransportKey('openai-session-chat-b')!;
+  expect(ownerA).toMatch(/^mcp-session-[a-f0-9]{64}$/);
+  expect(ownerA).toBe(goal.goalOwnerForTransportKey('openai-session-chat-a'));
+  expect(ownerA).not.toBe(ownerB);
+
+  expect(await goal.updateDirectGoalNow(ownerA, 'start', { objective: 'Finish task A', mode: 'goal' }))
+    .toEqual({ enabled: true, mode: 'goal', objective: 'Finish task A' });
+  expect(goal.directGoalState(ownerB).objective).toBe('');
+
+  const objectives = goal.snapshotGoalObjectives();
+  const switches = goal.snapshotGoalSwitches();
+  goal.resetGoalStateForTests();
+  goal.restoreGoalObjectives(objectives);
+  goal.restoreGoalSwitches(switches);
+  expect(goal.directGoalState(ownerA)).toEqual({ enabled: true, mode: 'goal', objective: 'Finish task A' });
+  expect(goal.directGoalState(ownerB).objective).toBe('');
+
+  expect(await goal.updateDirectGoalNow(ownerA, 'stop')).toEqual({ enabled: false, mode: 'goal', objective: 'Finish task A' });
+  expect(await goal.updateDirectGoalNow(ownerA, 'clear')).toEqual({ enabled: false, mode: 'goal', objective: '' });
+});
+
+it('refuses a direct Goal start without a concrete objective', async () => {
+  const owner = goal.goalOwnerForTransportKey('openai-session-no-objective')!;
+  await expect(goal.updateDirectGoalNow(owner, 'start')).rejects.toThrow('goal_objective_required');
+  expect(goal.directGoalState(owner).objective).toBe('');
+});
+
 it('keeps a withdrawn synthetic reply revoked when the deletion write fails and Goal is re-armed', async () => {
   const conversationId = 'deletion-failure-pro';
   const session = await createSession({ conversationId, title: 'Synthetic revocation' });
@@ -231,6 +260,55 @@ describe('what leaves this machine', () => {
     expect(await goal.conversationMessages(session.id, [next])).toEqual([
       { role: 'user', content: 'Original user requirements' }, { role: 'user', content: 'Next checkpoint' }
     ]);
+  });
+
+  it('feeds Jev advice into the normal Goal driver without giving Jev decision authority', async () => {
+    const config = defaultConfig();
+    await saveConfig({
+      ...config,
+      goal: {
+        ...config.goal,
+        enabled: true,
+        backend: 'api',
+        loopBackend: 'api',
+        jevEnabled: true,
+        model: 'deepseek/deepseek-v4-flash'
+      }
+    });
+    await setSecret('typeSafeApiKey', 'jev-test-key');
+    const session = await createSession({ title: 'Jev Goal integration', conversationId: 'jev-goal-integration' });
+    await appendEvent(session.id, { time: 100, source: 'extension', kind: 'user_message',
+      message: { text: 'Implement the feature and verify it', chars: 35, truncated: false } });
+    await appendEvent(session.id, { time: 110, source: 'extension', kind: 'assistant_message', messageId: 'jev-progress', final: true,
+      message: { text: 'Implementation is complete but verification is still pending.', chars: 59, truncated: false } });
+
+    const calls: unknown[] = [];
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      calls.push(body);
+      if (body.questions) {
+        return Response.json({
+          model: 'jev-test',
+          answers: {
+            completion_state: { type: 'choice', choice: 'verification_gap', confidence: 0.94,
+              probabilities: { complete: 0.01, unfinished: 0.03, verification_gap: 0.94, user_blocked: 0.01, uncertain: 0.01 } },
+            next_focus: { type: 'choice', choice: 'verification', confidence: 0.96,
+              probabilities: { missing_requirement: 0.01, repair_failure: 0.01, verification: 0.96, answer_from_context: 0.01, none: 0.01 } },
+            should_continue: { type: 'noul', noul: 0.97 }
+          },
+          usage: { input_tokens: 40, output_tokens: 8 }
+        });
+      }
+      const systems = body.messages.filter((message: { role: string }) => message.role === 'system')
+        .map((message: { content: string }) => message.content).join('\n');
+      expect(systems).toContain('# Jev semantic advisor (advisory only)');
+      expect(systems).toContain('completion_state: verification_gap (94%)');
+      return decision('continue', 'Run the requested verification and fix any failure.');
+    });
+
+    expect(await goal.draftFastFollowup(session.id, undefined, undefined, undefined, 'goal'))
+      .toBe('Run the requested verification and fix any failure.');
+    expect(calls).toHaveLength(2);
   });
 
   /**

@@ -1,6 +1,7 @@
 import { toolDeclaration } from './tool-declarations.js';
 import { registerPlanTool } from './plan-tool.js';
 import { goalWorkerChat } from '../bridge.js';
+import { directGoalState, goalOwnerForTransportKey, updateDirectGoalNow } from '../goal.js';
 import { announceSessionFinish, sessionFinishDeadline } from '../session/finish.js';
 import { getConfig } from '../config.js';
 /**
@@ -990,6 +991,39 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
 
   if (reg.sessionToolsExposed) {
     registerPlanTool(reg);
+    reg.register('goal', toolDeclaration('goal', () => ({
+      description:
+        'Control Goal for this exact ChatGPT chat using trusted MCP transport identity. Use action=start when the user types /goal or asks to start Goal here; include a concise objective that preserves the user’s requested finish line. Never ask for or supply a conversation id. stop disables Goal but keeps its objective; clear disables it and removes the objective; status reads this chat only.',
+      inputSchema: z.object({
+        action: z.enum(['start', 'stop', 'clear', 'status']),
+        objective: z.string().max(16_000).optional().describe('start only: concise finish line for the current user task.'),
+        mode: z.enum(['goal', 'loop']).optional().describe('start only; defaults to goal.')
+      }).strict(),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+    })), async ({ action, objective, mode }) => {
+      if (!reg.sessionToolsLive) return reg.featureDisabled('Session recording', 'Settings → Chat');
+      const caller = currentCaller();
+      const owner = goalOwnerForTransportKey(caller.transportKey);
+      if (!owner) return failIdentity(
+        'CALLER_IDENTITY_REQUIRED: Goal needs ChatGPT\'s trusted current-chat session identity. No Goal state changed. Reconnect the Core connector and retry; do not provide a conversation id or use browser scraping as a substitute.'
+      );
+      try {
+        const state = action === 'status' ? directGoalState(owner) : await updateDirectGoalNow(owner, action, { objective, mode });
+        const text = action === 'status'
+          ? `Goal for this chat is ${state.enabled ? 'on' : 'off'} in ${state.mode} mode${state.objective ? ` with objective: ${state.objective}` : '.'}`
+          : action === 'start'
+          ? `Goal started for this chat in ${state.mode} mode. Objective: ${state.objective}`
+          : action === 'clear'
+          ? 'Goal stopped for this chat and its objective was cleared.'
+          : 'Goal stopped for this chat. Its objective is retained.';
+        return { content: [{ type: 'text' as const, text }], structuredContent: { action, ...state } };
+      } catch (error) {
+        if (error instanceof Error && error.message === 'goal_objective_required') {
+          return fail('GOAL_OBJECTIVE_REQUIRED: starting Goal requires the current task finish line. No Goal state changed.');
+        }
+        return fail(`GOAL_UPDATE_FAILED: ${friendlyError(error)}`);
+      }
+    });
   }
   if (reg.ctx.exposedFinishTool ?? getConfig().ui.finishTool === true) {
     reg.register('session_finish', toolDeclaration('session_finish', () => ({

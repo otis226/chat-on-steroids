@@ -18,7 +18,7 @@
  */
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { createInboundTiming, formatInboundTiming, requestIdFromHeader, withInboundRequestId } from './inbound.js';
+import { createInboundTiming, formatInboundTiming, requestIdFromHeader, transportKeyFromHeader, withInboundRequestContext } from './inbound.js';
 import http from 'node:http';
 import type { Socket } from 'node:net';
 import { createMcpHandler } from '@modelcontextprotocol/server';
@@ -422,6 +422,7 @@ export async function startMcpServer(getContext: () => ToolContext): Promise<Mcp
     // The tool dispatch reads this back to join the call to the page request that issued
     // it; see inbound.ts for why it cannot be taken from the MCP call context.
     const requestId = requestIdFromHeader(req.headers['x-request-id']);
+    const transportKey = transportKeyFromHeader(req.headers['x-openai-session']);
     const dispatch = (body?: unknown): void => {
       if (stopping || res.destroyed) {
         if (!res.destroyed) {
@@ -441,7 +442,7 @@ export async function startMcpServer(getContext: () => ToolContext): Promise<Mcp
       };
       res.once('finish', release);
       res.once('close', release);
-      withInboundRequestId(requestId, () => void route.handler(req, res, body), timing, publication);
+      withInboundRequestContext({ requestId, transportKey }, () => void route.handler(req, res, body), timing, publication);
     };
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       void readBoundedJsonBody(req).then((parsed) => {

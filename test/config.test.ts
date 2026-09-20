@@ -528,6 +528,7 @@ describe('the goal loop settings', () => {
     expect((await loadConfig()).goal).toEqual({
       backend: 'chatgpt',
       loopBackend: 'chatgpt',
+      jevEnabled: false,
       includeToolCalls: false,
       impulseMinutes: 0,
       helperModel: 'gpt-5.6-sol',
@@ -668,6 +669,16 @@ describe('the goal loop settings', () => {
     expect((await loadConfig()).goal.includeToolCalls).toBe(true);
   });
 
+  it('keeps Jev Goal advice opt-in for old configs and preserves an explicit enable', async () => {
+    const config = defaultConfig();
+    expect(config.goal.jevEnabled).toBe(false);
+    const { jevEnabled: omitted, ...oldGoal } = config.goal;
+    await fs.writeFile(path.join(dir, 'config.json'), JSON.stringify({ ...config, goal: oldGoal }), 'utf8');
+    expect((await loadConfig()).goal.jevEnabled).toBe(false);
+    await saveConfig({ ...config, goal: { ...config.goal, jevEnabled: true } });
+    expect((await loadConfig()).goal.jevEnabled).toBe(true);
+  });
+
   it('adds the section to a config written before the loop existed', async () => {
     const before = defaultConfig() as unknown as Record<string, unknown>;
     const { goal: _dropped, ...withoutGoal } = before;
@@ -675,6 +686,7 @@ describe('the goal loop settings', () => {
     expect((await loadConfig()).goal).toEqual({
       backend: 'chatgpt',
       loopBackend: 'chatgpt',
+      jevEnabled: false,
       includeToolCalls: false,
       impulseMinutes: 0,
       helperModel: 'gpt-5.6-sol',

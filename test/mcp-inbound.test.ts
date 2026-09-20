@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { inboundRequestId, requestIdFromHeader, withInboundRequestId } from '../src/main/mcp/inbound.js';
+import {
+  inboundRequestId,
+  inboundTransportKey,
+  requestIdFromHeader,
+  transportKeyFromHeader,
+  withInboundRequestContext,
+  withInboundRequestId
+} from '../src/main/mcp/inbound.js';
 
 describe('MCP inbound request id boundary', () => {
   it('normalizes the raw x-request-id to the page join key once at ingress', () => {
@@ -30,5 +37,33 @@ describe('MCP inbound request id boundary', () => {
 
     expect(seen).toEqual(['wfr_a', 'wfr_b']);
     expect(inboundRequestId()).toBeNull();
+  });
+
+  it('hashes native ChatGPT session identity without retaining the provider value', () => {
+    const first = transportKeyFromHeader('opaque-current-chat');
+    expect(first).toMatch(/^openai-session-[a-f0-9]{64}$/);
+    expect(first).toBe(transportKeyFromHeader('opaque-current-chat'));
+    expect(first).not.toContain('opaque-current-chat');
+    expect(first).not.toBe(transportKeyFromHeader('another-chat'));
+    expect(transportKeyFromHeader(['one', 'two'])).toBeNull();
+    expect(transportKeyFromHeader('')).toBeNull();
+    expect(transportKeyFromHeader('x'.repeat(4097))).toBeNull();
+  });
+
+  it('keeps native current-chat principals isolated across concurrent requests', async () => {
+    const a = transportKeyFromHeader('chat-a')!;
+    const b = transportKeyFromHeader('chat-b')!;
+    const seen = await Promise.all([
+      withInboundRequestContext({ requestId: 'request-a', transportKey: a }, async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return [inboundRequestId(), inboundTransportKey()];
+      }),
+      withInboundRequestContext({ requestId: 'request-b', transportKey: b }, async () => {
+        await Promise.resolve();
+        return [inboundRequestId(), inboundTransportKey()];
+      })
+    ]);
+    expect(seen).toEqual([['request-a', a], ['request-b', b]]);
+    expect(inboundTransportKey()).toBeNull();
   });
 });

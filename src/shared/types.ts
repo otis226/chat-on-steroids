@@ -251,6 +251,8 @@ export interface GoalSettings {
   helperReasoning?: ReasoningEffort;
   backend?: GoalBackend;
   loopBackend?: 'api' | 'chatgpt';
+  /** Optional Jev/TypeSafe semantic advice before the normal Goal driver decides. */
+  jevEnabled?: boolean;
   enabled: boolean;
   /**
    * `goal` stops when the job is done; `loop` never stops on its own.

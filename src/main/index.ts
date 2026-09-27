@@ -70,6 +70,7 @@ import { openInPreferredBrowser } from './browser.js';
 import {
   applyLoginStartup,
   isBackgroundLaunch,
+  isHeadlessLaunch,
   createWindowActivationGate,
   ownsAppRuntime,
   registerNativeWindowActivation,
@@ -91,6 +92,13 @@ let shutdownStarted = false;
 let shutdownComplete = false;
 const usageWarmup = new AbortController();
 
+/**
+ * Explicit headless launch: Core/MCP/Goal/bridge bootstrap, restore and shutdown stay exactly
+ * as they are, while native presentation never exists. This is not the background flag, which
+ * only skips the first presentation and still lets a later activation create the window.
+ */
+const headless = isHeadlessLaunch(process.argv);
+
 // One instance only: two copies would fight over the tunnel and the config file.
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
@@ -102,6 +110,10 @@ if (!hasSingleInstanceLock) {
 }
 
 function createWindow(): void {
+  // The single BrowserWindow constructor in this app. Headless refuses here as well as at the
+  // activation gate and the presentation funnel, so no future activation source can resurrect
+  // a renderer by reaching this function through a path this file has not enumerated.
+  if (headless) return;
   const layout = windowLayoutForWorkArea(screen.getPrimaryDisplay().workArea);
   const icon = browserWindowIconPath(process.platform, app.isPackaged, process.resourcesPath);
   window = new BrowserWindow({
@@ -206,6 +218,10 @@ function showWindow(): void {
   // below additionally protects the long pre-window startup interval, while this invariant makes
   // a direct caller harmless once `before-quit` has started.
   if (quitting) return;
+  // A headless launch owns no presentation for the whole process lifetime. Second-instance
+  // activation, macOS activate, the tray/Open path and finish notices all end here, so this one
+  // check keeps every one of them harmless instead of branching at each source.
+  if (headless) return;
   if (!window) {
     createWindow();
     return;
@@ -215,7 +231,10 @@ function showWindow(): void {
   window.focus();
 }
 
-setFinishNotifier((title, body, sessionId, turnId) => {
+// A finish notice exists to bring the user back to the window, so a headless launch installs no
+// notifier at all: session/finish.ts then records its existing unavailable-notice fact, and an
+// automatic Goal/decision stays unaffected.
+setFinishNotifier(headless ? null : (title, body, sessionId, turnId) => {
   if (window?.isFocused() || !Notification.isSupported()) return false;
   const write = (): void => {
     showWindow();
@@ -240,7 +259,7 @@ setBrowserWorkArea(() => screen.getPrimaryDisplay().workArea);
 // Electron promises `second-instance` only after its own `ready`, not after our async startup.
 // Until CSP/permission handlers and IPC are installed below, a re-launch is only a focus request
 // for the initial window that startup is already going to show, so do not construct one early.
-const windowActivation = createWindowActivationGate(showWindow);
+const windowActivation = createWindowActivationGate(showWindow, !headless);
 
 /** Build the native tray image from encoded PNGs, never platform-dependent bitmap bytes. */
 function trayIcon(running: boolean): Electron.NativeImage {
@@ -434,10 +453,15 @@ void app.whenReady().then(async () => {
   // Dock activation/re-launch can safely recreate or focus it.
   registerNativeWindowActivation(app, windowActivation.request);
 
-  tray = new Tray(trayIcon(false), ...trayGuidArgsForPlatform());
-  tray.on('click', windowActivation.request);
-  refreshTray();
-  onStatusChange(refreshTray);
+  // Presentation only, and the owner-resolved boundary for this milestone: a headless launch
+  // keeps Core/MCP/bridge without a tray. Nothing else depends on it - refreshTray returns early
+  // while tray is null and shutdown uses the optional call.
+  if (!headless) {
+    tray = new Tray(trayIcon(false), ...trayGuidArgsForPlatform());
+    tray.on('click', windowActivation.request);
+    refreshTray();
+    onStatusChange(refreshTray);
+  }
 
   logInfo('app started');
 

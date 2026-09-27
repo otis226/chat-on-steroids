@@ -27,8 +27,11 @@ export function shouldBeginAppBootstrap(hasSingleInstanceLock: boolean, quitting
  * constructing a BrowserWindow across that gap. The normal startup path opens the initial window
  * once the gate is enabled, so dropping an earlier focus request loses nothing; later requests
  * focus/recreate the window immediately.
+ *
+ * allowPresentation === false is a headless launch: the gate then refuses every activation
+ * source for the whole process lifetime, so no caller has to repeat the launch-mode check.
  */
-export function createWindowActivationGate(showWindow: () => void): {
+export function createWindowActivationGate(showWindow: () => void, allowPresentation = true): {
   request: () => void;
   enable: () => void;
   disable: () => void;
@@ -41,7 +44,7 @@ export function createWindowActivationGate(showWindow: () => void): {
   let disabled = false;
   return {
     request: () => {
-      if (enabled && !disabled) showWindow();
+      if (allowPresentation && enabled && !disabled) showWindow();
     },
     enable: () => {
       if (!disabled) enabled = true;
@@ -82,6 +85,16 @@ export function registerNativeWindowActivation(
 /** Login launch is distinct from tunnel auto-connect and ordinary app activation. */
 export function isBackgroundLaunch(argv: readonly string[]): boolean {
   return argv.includes('--background');
+}
+
+/**
+ * Headless is its own launch discriminator, not a variant of the background flag. Background
+ * only skips the initial presentation and still lets a later activation create a window; a
+ * headless launch keeps native presentation unreachable for the whole process lifetime while
+ * the authoritative bootstrap, Core/MCP/bridge behavior and bounded shutdown stay unchanged.
+ */
+export function isHeadlessLaunch(argv: readonly string[]): boolean {
+  return argv.includes('--headless');
 }
 
 export function supportsLoginStartup(platform: NodeJS.Platform, packaged: boolean): boolean {

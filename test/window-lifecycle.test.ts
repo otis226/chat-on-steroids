@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import {
   applyLoginStartup,
   isBackgroundLaunch,
+  isHeadlessLaunch,
   supportsLoginStartup,
   createWindowActivationGate,
   ownsAppRuntime,
@@ -38,7 +39,7 @@ describe('native window activation', () => {
       restore: () => operations.push('restore'),
       show: () => operations.push('show'), focus: () => operations.push('focus') };
     const createWindow = vi.fn();
-    const context = vm.createContext({ window: native, quitting: false, createWindow });
+    const context = vm.createContext({ window: native, quitting: false, createWindow, headless: false });
     vm.runInContext(present + '\nshowWindow();', context);
     expect(operations.splice(0)).toEqual(['show', 'focus']);
     state.minimized = true;
@@ -186,6 +187,122 @@ describe('Windows login startup', () => {
     received({}, ['app.exe']);
     expect(request).toHaveBeenCalledOnce();
     expect(isBackgroundLaunch(['app.exe', '--background=false'])).toBe(false);
+    expect(source).toContain('if (!isBackgroundLaunch(process.argv)) windowActivation.request();');
+  });
+});
+
+describe('headless launch', () => {
+  it('reads --headless as its own launch discriminator, not as --background', () => {
+    expect(isHeadlessLaunch(['app.exe', '--headless'])).toBe(true);
+    expect(isHeadlessLaunch(['app.exe'])).toBe(false);
+    expect(isHeadlessLaunch(['app.exe', '--headless=false'])).toBe(false);
+    expect(isHeadlessLaunch(['app.exe', '--background'])).toBe(false);
+    expect(isBackgroundLaunch(['app.exe', '--headless'])).toBe(false);
+    expect(isHeadlessLaunch(['app.exe', '--also-headless'])).toBe(false);
+  });
+
+  it('refuses every activation source without turning into a shutdown gate', () => {
+    const show = vi.fn();
+    const headlessGate = createWindowActivationGate(show, false);
+    headlessGate.request();
+    headlessGate.enable();
+    headlessGate.request();
+    expect(show).not.toHaveBeenCalled();
+    // Headless must not reuse the before-quit disabled flag: bootstrap uses that flag as its own
+    // stop-restoring-shared-state signal, so a headless launch would never reach Core or bridge.
+    expect(headlessGate.isDisabled()).toBe(false);
+
+    const ordinary = createWindowActivationGate(show, true);
+    ordinary.enable();
+    ordinary.request();
+    expect(show).toHaveBeenCalledTimes(1);
+
+    // Ordinary and background launches keep the documented presentation behavior.
+    const background = createWindowActivationGate(show);
+    background.enable();
+    background.request();
+    expect(show).toHaveBeenCalledTimes(2);
+  });
+
+  it('never constructs or presents a window through the startup funnel', () => {
+    const source = readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8');
+    const funnel = source
+      .slice(source.indexOf('function createWindow(): void {'), source.indexOf('setFinishNotifier(', source.indexOf('function showWindow()')))
+      .replace('function createWindow(): void', 'function createWindow()')
+      .replace('function showWindow(): void', 'function showWindow()')
+      .replace(' as const', '');
+    const headlessContext = vm.createContext({
+      headless: true, quitting: false, window: null as unknown,
+      BrowserWindow: function () { throw new Error('headless constructed a BrowserWindow'); },
+      Tray: function () { throw new Error('headless constructed a Tray'); }
+    });
+    expect(() => vm.runInContext(funnel + 'showWindow(); createWindow();', headlessContext)).not.toThrow();
+    expect(headlessContext.window).toBeNull();
+
+    // Neighboring case: the same funnel still constructs the ordinary window when not headless.
+    const constructed: string[] = [];
+    const native = { on: () => undefined, once: () => undefined, removeMenu: () => undefined,
+      loadFile: () => undefined, loadURL: () => undefined,
+      webContents: { on: () => undefined, setWindowOpenHandler: () => undefined } };
+    const ordinaryContext = vm.createContext({
+      headless: false, quitting: false, window: null as unknown,
+      BrowserWindow: function () { constructed.push('BrowserWindow'); return native; },
+      screen: { getPrimaryDisplay: () => ({ workArea: {} }) },
+      windowLayoutForWorkArea: () => ({}), browserWindowIconPath: () => null,
+      getConfig: () => ({ ui: {} }), titleBarOverlayForTheme: () => ({}),
+      windowBackgroundForTheme: () => '#181818', UI_BASE_ZOOM: 1,
+      path: { join: () => 'index.html' }, __dirname: '/app',
+      process: { platform: 'linux', env: {}, resourcesPath: '/res' },
+      app: { isPackaged: false }
+    });
+    vm.runInContext(funnel + 'createWindow();', ordinaryContext);
+    expect(constructed).toEqual(['BrowserWindow']);
+    expect(ordinaryContext.window).toBe(native);
+  });
+
+  it('keeps the tray and the finish notifier out of a headless process', () => {
+    const source = readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8');
+    const trayCreation = source.indexOf('tray = new Tray(');
+    const trayBlock = source.slice(
+      source.lastIndexOf('if (!headless) {', trayCreation),
+      source.indexOf('logInfo(', trayCreation)
+    );
+    const trayCalls = (headless: boolean) => {
+      const calls: string[] = [];
+      const context = vm.createContext({
+        headless, tray: null as unknown,
+        Tray: function () { calls.push('tray'); return { on: () => undefined }; },
+        trayIcon: () => ({}), trayGuidArgsForPlatform: () => [],
+        windowActivation: { request: () => calls.push('open') },
+        refreshTray: () => calls.push('refresh'), onStatusChange: () => calls.push('status')
+      });
+      vm.runInContext(trayBlock, context);
+      return { calls, tray: context.tray };
+    };
+    expect(trayCalls(true)).toEqual({ calls: [], tray: null });
+    expect(trayCalls(false).calls).toEqual(['tray', 'refresh', 'status']);
+
+    const notifier = source.slice(
+      source.indexOf('setFinishNotifier(', source.indexOf('function showWindow()')),
+      source.indexOf('setBrowserWorkArea(')
+    ).replace(/\(\): void =>/g, '() =>');
+    const installed: unknown[] = [];
+    const install = (headless: boolean) => {
+      const context = vm.createContext({ headless, setFinishNotifier: (listener: unknown) => installed.push(listener) });
+      vm.runInContext(notifier, context);
+    };
+    install(true);
+    expect(installed).toEqual([null]);
+    install(false);
+    expect(typeof installed[1]).toBe('function');
+  });
+
+  it('wires headless as its own launch mode while background startup keeps its path', () => {
+    const source = readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8');
+    expect(source).toContain('const headless = isHeadlessLaunch(process.argv);');
+    expect(source).toContain('const windowActivation = createWindowActivationGate(showWindow, !headless);');
+    expect(source).toContain('if (headless) return;');
+    // Background still only skips the first presentation and re-enables ordinary activation.
     expect(source).toContain('if (!isBackgroundLaunch(process.argv)) windowActivation.request();');
   });
 });

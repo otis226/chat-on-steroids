@@ -2552,6 +2552,23 @@ describe('through the MCP endpoint', () => {
     expect(await callTool('read', { paths: ['/anything'] })).toContain('CALLER_IDENTITY_REQUIRED');
   });
 
+  it('does not wait on dormant-history ambiguity when unattributed calls are explicitly allowed', async () => {
+    startSwarm(1);
+    const worker = startWorker('worker-1');
+    finishAgent(worker.caller, 'parked history');
+    expect(releaseQuiescentRun()).toBe(true);
+
+    await setEnabled(true, 3, true);
+    const startedAt = performance.now();
+    const reply = await ordinaryWithRequestId('wfr_dormant_unattributed_fast', 'read', { paths: ['/anything'] });
+    const elapsedMs = performance.now() - startedAt;
+    await setEnabled(true);
+
+    expect(textOfReply(reply)).not.toContain('CALLER_IDENTITY_REQUIRED');
+    expect(textOfReply(reply)).toMatch(REFUSED_ON_ROOTS);
+    expect(elapsedMs).toBeLessThan(5_000);
+    expect(swarmRunning()).toBe(false);
+  });
   it('permits an unattributed workspace-dependent call to fail honestly instead of guessing a chat', async () => {
     await setEnabled(true, 3, true);
     startSwarm(1);

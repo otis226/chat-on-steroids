@@ -513,6 +513,10 @@ async function dispatchTracked(
   // no explicit base really do consume caller state, so they wait for their exact request-id
   // mate while a swarm is active. Use the full exact-id window, not the shorter prime window:
   // the live worker failure that motivated IDENTITY_EVIDENCE_MS arrived ~8 seconds late.
+  // allowUnattributedCalls is the explicit opt-out from ambiguity fences. When it is
+  // enabled, waiting cannot change the verdict for an unknown caller: it is allowed to proceed,
+  // while already-proven worker ownership is still enforced below.
+  const allowUnattributed = getConfig().multiAgent.allowUnattributedCalls;
   const identitySensitive = needsWorkspaceIdentity(name, args);
   // update_plan always consumes this exact session, even outside a swarm. Resolve it
   // before the shared blocked/superseded checks rather than guessing from selection.
@@ -520,7 +524,7 @@ async function dispatchTracked(
   // handler runs. Recording a late identity cannot recover a discarded anonymous frame.
   const desktopContext = surface === 'desktop' && (name === 'get_window_state' ||
     (WINDOWS_COMPUTER_STATE_INPUT_METHODS as readonly string[]).includes(name));
-  if (!context.caller.conversationId && (desktopContext || name === 'exec' || name === 'update_plan' || (identitySensitive && swarmRunning())) && requestId) {
+  if (!context.caller.conversationId && (desktopContext || name === 'update_plan' || (!allowUnattributed && identitySensitive && swarmRunning())) && requestId) {
     setCallerConversation(
       context,
       await awaitFreshCallOrigin(name, startedAt, IDENTITY_EVIDENCE_MS, { requestId })
@@ -529,7 +533,7 @@ async function dispatchTracked(
   // A run that ended leaves an explicit short-lived lease tombstone for each open worker
   // chat. Resolve exact request identity before ordinary tools too while such leases exist;
   // otherwise an explicit-workdir exec could keep mutating after its worker was retired.
-  if (!context.caller.conversationId && hasRetiredWorkerLeases() && requestId) {
+  if (!allowUnattributed && !context.caller.conversationId && hasRetiredWorkerLeases() && requestId) {
     setCallerConversation(
       context,
       await awaitFreshCallOrigin(name, startedAt, IDENTITY_EVIDENCE_MS, { requestId })
@@ -540,7 +544,7 @@ async function dispatchTracked(
   // attribution an absolute read/exec would otherwise look like an unrelated ordinary chat and
   // run successfully. Resolve the exact mate for every call while such worker conversations
   // exist, just as we do for short-lived retired worker leases.
-  if (!context.caller.conversationId && hasDormantWorkerLeases() && requestId) {
+  if (!allowUnattributed && !context.caller.conversationId && hasDormantWorkerLeases() && requestId) {
     setCallerConversation(
       context,
       await awaitFreshCallOrigin(name, startedAt, IDENTITY_EVIDENCE_MS, { requestId })
@@ -663,7 +667,6 @@ async function dispatchTracked(
   // chat over to `superseded`, chat A gets no tool at all, and each refusal tells the model
   // the only thing it can usefully do is write the brief.
   const compacting = !blockedChat && compactingConversation(context.caller.conversationId) !== null;
-  const allowUnattributed = getConfig().multiAgent.allowUnattributedCalls;
   const retiredLeaseAmbiguous =
     !allowUnattributed && hasRetiredWorkerLeases() && !context.caller.conversationId;
   const dormantLeaseAmbiguous =
